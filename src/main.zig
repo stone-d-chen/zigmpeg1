@@ -64,6 +64,40 @@ fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
     std.debug.assert(bit_reader.bit_buffer == 0 and bit_reader.bit_count == 0);
 }
 
+fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
+    // system header flags
+
+    const header_length = try bit_reader.readBits(16);
+    std.log.debug("Length {}", .{header_length});
+
+    _ = try bit_reader.readBits(1);
+
+    data.rate_bound = try bit_reader.readBits(22);
+    _ = try bit_reader.readBits(1);
+
+    data.audio_bound = @intCast(try bit_reader.readBits(6));
+
+    data.fixed_flag = @intCast(try bit_reader.readBits(1));
+
+    data.csps_flag = @intCast(try bit_reader.readBits(1));
+
+    data.system_audio_lock_flag = @intCast(try bit_reader.readBits(1));
+    data.system_video_lock_flag = @intCast(try bit_reader.readBits(1));
+
+    _ = try bit_reader.readBits(1);
+
+    data.video_bound = @intCast(try bit_reader.readBits(5));
+
+    _ = try bit_reader.readBits(8);
+    while (try bit_reader.peekBits(1) == 1) {
+        data.stream_id = @intCast(try bit_reader.readBits(8));
+        _ = try bit_reader.readBits(2);
+        data.std_buffer_bound_scale = @intCast(try bit_reader.readBits(1));
+        data.std_buffer_size_bound = @intCast(try bit_reader.readBits(13));
+    }
+    std.log.debug("rate_bound {}\n, audio_bound {}\n, stream_id = {}", .{ data.rate_bound, data.audio_bound, data.stream_id });
+}
+
 pub const mpeg = struct {
     system_clock_reference: u33 = 0,
     mux_rate: u32 = 0,
