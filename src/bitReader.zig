@@ -41,4 +41,19 @@ pub const bitReader = struct {
         self.bit_buffer = 0;
         self.bit_count = 0;
     }
+
+    pub fn readBits31515(self: *Self) !u33 {
+        var result: u33 = 0;
+
+        result |= try self.readBits(3) << (33 - 3);
+        _ = try self.readBits(1);
+
+        result |= (try self.readBits(15)) << (33 - 3 - 15);
+        _ = try self.readBits(1);
+
+        result |= try self.readBits(15);
+        _ = try self.readBits(1);
+
+        return result;
+    }
 };

@@ -43,21 +43,6 @@ fn toCode(code: u8) start_codes {
     return @as(start_codes, @enumFromInt(code));
 }
 
-fn readBits31515(bit_reader: *bitReader) !u33 {
-    var result: u33 = 0;
-
-    result |= try bit_reader.readBits(3) << (33 - 3);
-    _ = try bit_reader.readBits(1);
-
-    result |= (try bit_reader.readBits(15)) << (33 - 3 - 15);
-    _ = try bit_reader.readBits(1);
-
-    result |= try bit_reader.readBits(15);
-    _ = try bit_reader.readBits(1);
-
-    return result;
-}
-
 fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
     const debug = true;
     // read for bit fixed
@@ -65,7 +50,7 @@ fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
     if (debug) std.log.debug("Processing Pack", .{});
     _ = try bit_reader.readBits(4); // pack  bits
 
-    data.system_clock_reference = try readBits31515(bit_reader);
+    data.system_clock_reference = try bit_reader.readBits31515();
     if (debug) std.debug.print("system_clock_reference {} || ", .{data.system_clock_reference});
 
     _ = try bit_reader.readBits(1);
@@ -128,8 +113,6 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
 }
 
 pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
-    // const stream_id: u8 = @intCast(try bit_reader.readBits(8));
-    // data.packet_stream_id = stream_id;
     data.packet_length = @intCast(try bit_reader.readBits(16));
 
     std.log.debug("stream {b} packet_length {}", .{ data.packet_stream_id, data.packet_length });
@@ -146,14 +129,14 @@ pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
         data.std_buffer_size = @intCast(try bit_reader.readBits(13));
     } else if (signal_bits == 0b0010) {
         bit_reader.consumeBits(4);
-        data.presentation_time_stamp = try readBits31515(bit_reader);
+        data.presentation_time_stamp = try bit_reader.readBits31515();
     } else if (signal_bits == 0b0011) {
         bit_reader.consumeBits(4);
 
-        data.presentation_time_stamp = try readBits31515(bit_reader);
+        data.presentation_time_stamp = try bit_reader.readBits31515();
 
         _ = try bit_reader.readBits(4);
-        data.decoding_time_stamp = try readBits31515(bit_reader);
+        data.decoding_time_stamp = try bit_reader.readBits31515();
 
         std.log.debug("pts/dts {} {}", .{ data.presentation_time_stamp, data.decoding_time_stamp });
     } else {
@@ -263,12 +246,12 @@ pub fn main() !void {
                 // process video but we should really capture everything in a range
                 global_mpeg.packet_stream_id = code;
                 try processPacket(&global_mpeg, &bit_reader);
-                // break;
+            } else if (codeenum == start_codes.sequence_header) {
+                // so this gets forwarded to the video decoder
             } else if (codeenum == start_codes.padding_stream) {
-                std.log.debug("Padding stream, breaking loop", .{});
+                std.log.debug("padding stream, breaking loop", .{});
                 break;
-            } else {
-                // std.log.debug("Unknown start {X}", .{code});
+                // std.log.debug("unknown start {X}", .{code});
             }
 
             byte0 = try reader.readByte();
