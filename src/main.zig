@@ -147,6 +147,42 @@ pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
     assert(bit_reader.bit_count == 0);
 }
 
+pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
+    std.log.debug("sequence header", .{});
+
+    data.horizontal_size = @intCast(try bit_reader.readBits(12));
+    data.vertical_size = @intCast(try bit_reader.readBits(12));
+
+    data.pel_aspect_ratio = @intCast(try bit_reader.readBits(4));
+    data.picture_rate = @intCast(try bit_reader.readBits(4));
+    data.bit_rate = @intCast(try bit_reader.readBits(18));
+
+    _ = try bit_reader.readBits(1);
+
+    data.vbv_buffer_size = @intCast(try bit_reader.readBits(10));
+
+    data.constrained_parameters_flag = @intCast(try bit_reader.readBits(1));
+    data.load_intra_quantizer_matrix = @intCast(try bit_reader.readBits(1));
+
+    if (data.load_intra_quantizer_matrix == 1) {
+        for (0..64) |i| {
+            data.intra_quantizer_matrix[i] = @intCast(try bit_reader.readBits(8));
+        }
+    }
+
+    data.load_non_intra_quantizer_matrix = @intCast(try bit_reader.readBits(1));
+
+    if (data.load_non_intra_quantizer_matrix == 1) {
+        for (0..64) |i| {
+            data.intra_quantizer_matrix[i] = @intCast(try bit_reader.readBits(8));
+        }
+    }
+
+    std.log.debug("{} x {}", .{ data.horizontal_size, data.vertical_size });
+
+    assert(bit_reader.bit_count == 0);
+}
+
 pub const mpeg = struct {
     system_clock_reference: u33 = 0,
     mux_rate: u32 = 0,
@@ -185,6 +221,9 @@ pub const mpeg = struct {
     load_intra_quantizer_matrix: u1,
 
     intra_quantizer_matrix: [64]u8,
+
+    load_non_intra_quantizer_matrix: u1,
+
     non_intra_quantizer_matrix: [64]u8,
     // extension_start_code signals mpeg2
     // user_data
@@ -238,20 +277,20 @@ pub fn main() !void {
 
             const code = try reader.readByte();
             const codeenum = toCode(code);
-            if (codeenum == start_codes.pack_start) {
-                try processPack(&global_mpeg, &bit_reader);
-            } else if (codeenum == start_codes.system_header_start) {
-                try processSystemHeader(&global_mpeg, &bit_reader);
-            } else if (codeenum == start_codes.video_stream_0) {
-                // process video but we should really capture everything in a range
-                global_mpeg.packet_stream_id = code;
-                try processPacket(&global_mpeg, &bit_reader);
-            } else if (codeenum == start_codes.sequence_header) {
-                // so this gets forwarded to the video decoder
-            } else if (codeenum == start_codes.padding_stream) {
-                std.log.debug("padding stream, breaking loop", .{});
-                break;
-                // std.log.debug("unknown start {X}", .{code});
+
+            switch (codeenum) {
+                .pack_start => try processPack(&global_mpeg, &bit_reader),
+                .system_header_start => try processSystemHeader(&global_mpeg, &bit_reader),
+                .video_stream_0 => {
+                    global_mpeg.packet_stream_id = code;
+                    try processPacket(&global_mpeg, &bit_reader);
+                },
+                .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
+                .padding_stream => {
+                    std.log.debug("padding stream, breaking loop", .{});
+                    break;
+                },
+                else => {},
             }
 
             byte0 = try reader.readByte();
