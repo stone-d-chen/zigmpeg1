@@ -190,6 +190,33 @@ pub fn processGroupOfPictures(data: *mpeg, bit_reader: *bitReader) !void {
     bit_reader.flushBits();
 }
 
+pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
+    data.temporal_reference = @intCast(try bit_reader.readBits(10));
+    data.picture_coding_type = @intCast(try bit_reader.readBits(3));
+    data.vbv_delay = @intCast(try bit_reader.readBits(16));
+
+    if (data.picture_coding_type == 2 or data.picture_coding_type == 3) {
+        data.full_pel_forward_vector = @intCast(try bit_reader.readBits(1));
+        data.forward_f_code = @intCast(try bit_reader.readBits(3));
+    }
+
+    if (data.picture_coding_type == 3) {
+        data.full_pel_backward_vector = @intCast(try bit_reader.readBits(3));
+        data.backward_f_code = @intCast(try bit_reader.readBits(3));
+    }
+
+    while (try bit_reader.peekBits(1) == 1) {
+        data.extra_bit_picture = @intCast(try bit_reader.readBits(1));
+        data.extra_information_picture = @intCast(try bit_reader.readBits(8));
+    }
+    // end extra info = 0;
+    data.extra_bit_picture = @intCast(try bit_reader.readBits(1));
+
+    // @todo extension
+    // @todo user data
+    bit_reader.flushBits();
+}
+
 pub const mpeg = struct {
     system_clock_reference: u33 = 0,
     mux_rate: u32 = 0,
@@ -257,6 +284,8 @@ pub const mpeg = struct {
     extra_information_picture: u8,
     extra_bit_picture2: u1,
     // extension etc
+
+    //
 
 };
 
