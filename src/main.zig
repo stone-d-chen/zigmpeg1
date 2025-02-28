@@ -1,6 +1,8 @@
 const std = @import("std");
 const bitReader = @import("bitReader.zig").bitReader;
 
+const assert = std.debug.assert;
+
 const start_codes = enum(u8) {
     // video
     picture_start = 0x00,
@@ -28,6 +30,13 @@ const start_codes = enum(u8) {
 
     video_stream_0 = 0xE0,
     video_stream_15 = 0xEF,
+};
+
+const stream_ids = enum(u8) {
+    video = 0b1110_0000,
+    audio = 0b1100_0000,
+    padding = 0b1011_1110,
+    // incomplete
 };
 
 fn toCode(code: u8) start_codes {
@@ -67,8 +76,11 @@ fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
 fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
     // system header flags
 
-    const header_length = try bit_reader.readBits(16);
-    std.log.debug("Length {}", .{header_length});
+    const debug = true;
+
+    var header_length = try bit_reader.readBits(16);
+    if (debug) std.log.debug("Length {}", .{header_length});
+    assert(header_length >= 6 and header_length <= 165);
 
     _ = try bit_reader.readBits(1);
 
@@ -76,6 +88,7 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
     _ = try bit_reader.readBits(1);
 
     data.audio_bound = @intCast(try bit_reader.readBits(6));
+    assert(data.audio_bound <= 32);
 
     data.fixed_flag = @intCast(try bit_reader.readBits(1));
 
@@ -89,13 +102,56 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
     data.video_bound = @intCast(try bit_reader.readBits(5));
 
     _ = try bit_reader.readBits(8);
-    while (try bit_reader.peekBits(1) == 1) {
+
+    header_length -= 6;
+
+    // this causes an annoying issue where we get an extra byte
+    while (header_length != 0) : (header_length -= 3) {
         data.stream_id = @intCast(try bit_reader.readBits(8));
+        if (debug) std.log.debug("stream_id {b}", .{data.stream_id});
+
+        if (@as(stream_ids, @enumFromInt(data.stream_id & 0xF0)) == stream_ids.video) {
+            if (debug) std.log.debug("video stream {}", .{data.stream_id & 0x0F});
+        }
+
         _ = try bit_reader.readBits(2);
         data.std_buffer_bound_scale = @intCast(try bit_reader.readBits(1));
         data.std_buffer_size_bound = @intCast(try bit_reader.readBits(13));
     }
-    std.log.debug("rate_bound {}\n, audio_bound {}\n, stream_id = {}", .{ data.rate_bound, data.audio_bound, data.stream_id });
+    if (debug) std.log.debug("rate_bound {}\n, audio_bound {}\n, stream_id = {}", .{ data.rate_bound, data.audio_bound, data.stream_id });
+}
+
+pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
+    std.log.debug("calling process Packet", .{});
+    const stream_id: u8 = @intCast(try bit_reader.readBits(8));
+    const packet_length: u16 = @intCast(try bit_reader.readBits(16));
+
+    std.log.debug("stream {} packet_length {}", .{ stream_id, packet_length });
+    _ = data;
+    // @todo: if not private stream
+
+    while (try bit_reader.peekBits(8) == 0xFF) {
+        bit_reader.consumeBits(8);
+    }
+
+    const bits = try bit_reader.peekBits(4);
+    _ = bits;
+    if (try bit_reader.peekBits(2) == 0b0001) {
+        bit_reader.consumeBits(2);
+        const std_buf_scal = try bit_reader.readBits(1);
+        std.log.debug("std_buf_scale {}", .{std_buf_scal});
+
+        _ = try bit_reader.readBits(13);
+    }
+
+    if (try bit_reader.peekBits(4) == 0b0010) {
+        std.log.debug("pts", .{});
+        bit_reader.consumeBits(4);
+    }
+
+    if (try bit_reader.peekBits(4) == 0b0011) {
+        std.log.debug("pts/dts", .{});
+    }
 }
 
 pub const mpeg = struct {
@@ -116,7 +172,7 @@ pub const mpeg = struct {
     std_buffer_bound_scale: u1,
     std_buffer_size_bound: u13,
 
-    // packet
+    // puacket
     packet_stream_id: u8,
     packet_length: u16,
     std_buffer_scale: u1,
@@ -189,11 +245,14 @@ pub fn main() !void {
             const code = try reader.readByte();
             const codeenum = toCode(code);
             if (codeenum == start_codes.pack_start) {
-                // std.log.debug(" {X}", .{code});
                 try processPack(&global_mpeg, &bit_reader);
             } else if (codeenum == start_codes.system_header_start) {
-                std.log.debug("{X}", .{code});
                 try processSystemHeader(&global_mpeg, &bit_reader);
+            } else if (codeenum == start_codes.video_stream_0) {
+                // process video but we should really capture everything in a range
+                std.log.debug("packet", .{});
+                try processPacket(&global_mpeg, &bit_reader);
+                break;
             } else if (codeenum == start_codes.padding_stream) {
                 std.log.debug("Padding stream, breaking loop", .{});
                 break;
