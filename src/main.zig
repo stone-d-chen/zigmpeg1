@@ -54,7 +54,7 @@ fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
     if (debug) std.debug.print("system_clock_reference {} || ", .{data.system_clock_reference});
 
     _ = try bit_reader.readBits(1);
-    data.mux_rate = try bit_reader.readBits(22);
+    data.mux_rate = @intCast(try bit_reader.readBits(22));
     if (debug) std.log.debug("mux_rate {}", .{data.mux_rate});
 
     _ = try bit_reader.readBits(1);
@@ -74,7 +74,7 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
 
     _ = try bit_reader.readBits(1);
 
-    data.rate_bound = try bit_reader.readBits(22);
+    data.rate_bound = @intCast(try bit_reader.readBits(22));
     _ = try bit_reader.readBits(1);
 
     data.audio_bound = @intCast(try bit_reader.readBits(6));
@@ -183,6 +183,13 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
     assert(bit_reader.bit_count == 0);
 }
 
+pub fn processGroupOfPictures(data: *mpeg, bit_reader: *bitReader) !void {
+    data.time_code = @intCast(try bit_reader.readBits(25));
+    data.closed_gop = @intCast(try bit_reader.readBits(1));
+    data.broken_link = @intCast(try bit_reader.readBits(1));
+    bit_reader.flushBits();
+}
+
 pub const mpeg = struct {
     system_clock_reference: u33 = 0,
     mux_rate: u32 = 0,
@@ -286,6 +293,7 @@ pub fn main() !void {
                     try processPacket(&global_mpeg, &bit_reader);
                 },
                 .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
+                .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
                 .padding_stream => {
                     std.log.debug("padding stream, breaking loop", .{});
                     break;
