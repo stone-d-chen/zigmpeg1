@@ -43,27 +43,32 @@ fn toCode(code: u8) start_codes {
     return @as(start_codes, @enumFromInt(code));
 }
 
+fn readBits31515(bit_reader: *bitReader) !u33 {
+    var result: u33 = 0;
+
+    result |= try bit_reader.readBits(3) << (33 - 3);
+    _ = try bit_reader.readBits(1);
+
+    result |= (try bit_reader.readBits(15)) << (33 - 3 - 15);
+    _ = try bit_reader.readBits(1);
+
+    result |= try bit_reader.readBits(15);
+    _ = try bit_reader.readBits(1);
+
+    return result;
+}
+
 fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
-    const debug = false;
+    const debug = true;
     // read for bit fixed
     // ...
     if (debug) std.log.debug("Processing Pack", .{});
     _ = try bit_reader.readBits(4); // pack  bits
 
-    data.system_clock_reference = 0;
-    data.system_clock_reference |= try bit_reader.readBits(3) << (33 - 3);
-    _ = try bit_reader.readBits(1);
-
-    const bits = try bit_reader.readBits(15);
-
-    data.system_clock_reference |= bits << (33 - 3 - 15);
-    _ = try bit_reader.readBits(1);
-
-    data.system_clock_reference |= try bit_reader.readBits(15);
-
+    data.system_clock_reference = try readBits31515(bit_reader);
     if (debug) std.debug.print("system_clock_reference {} || ", .{data.system_clock_reference});
 
-    _ = try bit_reader.readBits(2);
+    _ = try bit_reader.readBits(1);
     data.mux_rate = try bit_reader.readBits(22);
     if (debug) std.log.debug("mux_rate {}", .{data.mux_rate});
 
@@ -119,39 +124,44 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
         data.std_buffer_size_bound = @intCast(try bit_reader.readBits(13));
     }
     if (debug) std.log.debug("rate_bound {}\n, audio_bound {}\n, stream_id = {}", .{ data.rate_bound, data.audio_bound, data.stream_id });
+    std.debug.assert(bit_reader.bit_count == 0);
 }
 
 pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
-    std.log.debug("calling process Packet", .{});
-    const stream_id: u8 = @intCast(try bit_reader.readBits(8));
-    const packet_length: u16 = @intCast(try bit_reader.readBits(16));
+    // const stream_id: u8 = @intCast(try bit_reader.readBits(8));
+    // data.packet_stream_id = stream_id;
+    data.packet_length = @intCast(try bit_reader.readBits(16));
 
-    std.log.debug("stream {} packet_length {}", .{ stream_id, packet_length });
-    _ = data;
-    // @todo: if not private stream
+    std.log.debug("stream {b} packet_length {}", .{ data.packet_stream_id, data.packet_length });
 
     while (try bit_reader.peekBits(8) == 0xFF) {
         bit_reader.consumeBits(8);
     }
 
-    const bits = try bit_reader.peekBits(4);
-    _ = bits;
-    if (try bit_reader.peekBits(2) == 0b0001) {
+    const signal_bits = try bit_reader.peekBits(4);
+
+    if (signal_bits == 0b0001) {
         bit_reader.consumeBits(2);
-        const std_buf_scal = try bit_reader.readBits(1);
-        std.log.debug("std_buf_scale {}", .{std_buf_scal});
-
-        _ = try bit_reader.readBits(13);
-    }
-
-    if (try bit_reader.peekBits(4) == 0b0010) {
-        std.log.debug("pts", .{});
+        data.std_buffer_scale = @intCast(try bit_reader.readBits(1));
+        data.std_buffer_size = @intCast(try bit_reader.readBits(13));
+    } else if (signal_bits == 0b0010) {
         bit_reader.consumeBits(4);
+        data.presentation_time_stamp = try readBits31515(bit_reader);
+    } else if (signal_bits == 0b0011) {
+        bit_reader.consumeBits(4);
+
+        data.presentation_time_stamp = try readBits31515(bit_reader);
+
+        _ = try bit_reader.readBits(4);
+        data.decoding_time_stamp = try readBits31515(bit_reader);
+
+        std.log.debug("pts/dts {} {}", .{ data.presentation_time_stamp, data.decoding_time_stamp });
+    } else {
+        const expected_bits = try bit_reader.readBits(8);
+        assert(expected_bits == 0b0000_1111);
     }
 
-    if (try bit_reader.peekBits(4) == 0b0011) {
-        std.log.debug("pts/dts", .{});
-    }
+    assert(bit_reader.bit_count == 0);
 }
 
 pub const mpeg = struct {
@@ -172,12 +182,13 @@ pub const mpeg = struct {
     std_buffer_bound_scale: u1,
     std_buffer_size_bound: u13,
 
-    // puacket
+    // packet
     packet_stream_id: u8,
     packet_length: u16,
     std_buffer_scale: u1,
     std_buffer_size: u13,
     presentation_time_stamp: u33,
+    decoding_time_stamp: u33,
 
     // sequence header
 
@@ -250,9 +261,9 @@ pub fn main() !void {
                 try processSystemHeader(&global_mpeg, &bit_reader);
             } else if (codeenum == start_codes.video_stream_0) {
                 // process video but we should really capture everything in a range
-                std.log.debug("packet", .{});
+                global_mpeg.packet_stream_id = code;
                 try processPacket(&global_mpeg, &bit_reader);
-                break;
+                // break;
             } else if (codeenum == start_codes.padding_stream) {
                 std.log.debug("Padding stream, breaking loop", .{});
                 break;
