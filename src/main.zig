@@ -217,6 +217,18 @@ pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
     bit_reader.flushBits();
 }
 
+pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
+    data.quantizer_scale = @intCast(try bit_reader.readBits(5));
+    while (try bit_reader.peekBits(1) == 1) {
+        _ = try bit_reader.readBits(1);
+        data.extra_information_slice = @intCast(try bit_reader.readBits(5));
+    }
+    _ = try bit_reader.readBits(1);
+    // macroblock
+
+    bit_reader.flushBits();
+}
+
 pub const mpeg = struct {
     system_clock_reference: u33 = 0,
     mux_rate: u32 = 0,
@@ -286,7 +298,8 @@ pub const mpeg = struct {
     // extension etc
 
     //
-
+    quantizer_scale: u5,
+    extra_information_slice: u8,
 };
 
 pub fn main() !void {
@@ -323,6 +336,8 @@ pub fn main() !void {
                 },
                 .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
                 .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
+                .slice_start_1 => {},
+
                 .padding_stream => {
                     std.log.debug("padding stream, breaking loop", .{});
                     break;
