@@ -50,10 +50,10 @@ pub const mb_motion_vector_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b0000_0011_001, .value = @bitCast(@as(i8, -16)), .length = 11 },
 };
 
-const mb_motion_vector_tables = generateLookupTables(&mb_motion_vector_vlc, 11);
+const mb_motion_vector_tables = generateLookupTables(&mb_motion_vector_vlc, getMaxLength(&mb_motion_vector_vlc));
 
 pub const mb_motion_vector_lookup: CodeLookup = .{
-    .bit_length = 11,
+    .bit_length = mb_motion_vector_tables.bit_length,
     .table = &mb_motion_vector_tables.table,
     .lengths = &mb_motion_vector_tables.lengths,
 };
@@ -62,30 +62,31 @@ const mb_type_I_vlc: [2]VariableLengthCode = .{
     .{ .code = 0b1, .value = 0b10000, .length = 1 },
     .{ .code = 0b01, .value = 0b10000, .length = 2 },
 };
-const mb_type_I_tables = generateLookupTables(&mb_type_I_vlc, 2);
+const mb_type_I_tables = generateLookupTables(&mb_type_I_vlc, getMaxLength(&mb_type_I_vlc));
 
 pub const mb_type_I_lookup: CodeLookup = .{
-    .bit_length = 2,
+    .bit_length = mb_type_I_tables.bit_length,
     .table = &mb_type_I_tables.table,
     .lengths = &mb_type_I_tables.lengths,
 };
 
+// @todo I need to check all of these.... ai is useless
 pub const mb_type_P_vlc: [7]VariableLengthCode = .{
-    .{ .code = 0b001, .value = 0b00000, .length = 3 },
+    .{ .code = 0b001, .value = 0b00010, .length = 3 },
     .{ .code = 0b01, .value = 0b01000, .length = 2 },
-    .{ .code = 0b00001, .value = 0b01000, .length = 5 },
-    .{ .code = 0b1, .value = 0b01000, .length = 1 },
-    .{ .code = 0b00010, .value = 0b01000, .length = 5 },
-    .{ .code = 0b00001, .value = 0b10000, .length = 5 },
-    .{ .code = 0b0010, .value = 0b00000, .length = 4 },
+    .{ .code = 0b0000_1, .value = 0b01001, .length = 5 },
+    .{ .code = 0b1, .value = 0b01010, .length = 1 },
+    .{ .code = 0b0001_0, .value = 0b01011, .length = 5 },
+    .{ .code = 0b0001_1, .value = 0b10000, .length = 5 },
+    .{ .code = 0b0000_01, .value = 0b10001, .length = 6 },
 };
 
-const mb_type_P_tables = generateLookupTables(&mb_type_P_vlc, 5);
+const mb_type_P_tables = generateLookupTables(&mb_type_P_vlc, getMaxLength(&mb_type_P_vlc));
 
 pub const mb_type_P_struct: CodeLookup = .{
-    .bit_length = 5,
+    .bit_length = mb_type_P_tables.bit_length,
     .table = &mb_type_P_tables.table,
-    .lengths = &&mb_type_P_tables.lengths,
+    .lengths = &mb_type_P_tables.lengths,
 };
 
 pub const mb_type_B_vlc: [10]VariableLengthCode = .{
@@ -101,10 +102,10 @@ pub const mb_type_B_vlc: [10]VariableLengthCode = .{
     .{ .code = 0b000001, .value = 0b10000, .length = 6 },
 };
 
-const mb_type_B_tables = generateLookupTables(&mb_type_B_vlc, 6);
+const mb_type_B_tables = generateLookupTables(&mb_type_B_vlc, getMaxLength(&mb_type_B_vlc));
 
 pub const mb_type_B_struct: CodeLookup = .{
-    .bit_length = 6,
+    .bit_length = mb_type_B_tables.lengths,
     .table = &mb_type_B_tables.table,
     .lengths = &mb_type_B_tables.lengths,
 };
@@ -150,19 +151,34 @@ pub const mb_address_increment_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b1, .value = 1, .length = 1 },
 };
 
-pub const address_increment_tables = generateLookupTables(&mb_address_increment_vlc, 11);
+pub const address_increment_tables = generateLookupTables(&mb_address_increment_vlc, getMaxLength(&mb_address_increment_vlc));
 
 pub const mb_address_increment_lookup: CodeLookup = .{
-    .bit_length = 11,
+    .bit_length = address_increment_tables.bit_length,
     .table = &address_increment_tables.table,
     .lengths = &address_increment_tables.lengths,
 };
 
-// @todo just return a struct that also contains the bit length...probably easier...
-// we can calculate the size of the table at comptime based on the max length.
-pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits: usize) struct { table: [1 << bits]u8, lengths: [1 << bits]u8 } {
+// something annoying it seems like anonymous structs can't take comptime defined variables
+
+fn getMaxLength(vlc_table: []const VariableLengthCode) u8 {
+    var max_bit_length: u8 = 0;
+
+    for (0..vlc_table.len) |i| {
+        const entry = vlc_table[i];
+        const bit_length = entry.length;
+        if (bit_length > max_bit_length) max_bit_length = bit_length;
+    }
+
+    return max_bit_length;
+}
+
+// @todo do we just return a CodeLookup and force the functions to take a pointer to a CodeLookup?
+// I guess we can make a multi-item array?
+pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits: usize) struct { bit_length: u8, table: [1 << bits]u8, lengths: [1 << bits]u8 } {
     var table: [1 << bits]u8 = @splat(255);
     var lengths: [1 << bits]u8 = @splat(0);
+    var max_bit_length: u8 = 0;
 
     @setEvalBranchQuota(5000);
     for (0..vlc_table.len) |i| {
@@ -170,6 +186,8 @@ pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits
         const code = entry.code;
         const value = entry.value;
         const bit_length = entry.length;
+
+        if (bit_length > max_bit_length) max_bit_length = bit_length;
 
         if (value == 255) {
             // we're using this as a sentinal value so if we're casting from -1 we might be overwriting a value
@@ -185,5 +203,6 @@ pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits
             lengths[first_index + index] = bit_length;
         }
     }
-    return .{ .table = table, .lengths = lengths };
+    std.debug.assert(max_bit_length == bits);
+    return .{ .bit_length = max_bit_length, .table = table, .lengths = lengths };
 }
