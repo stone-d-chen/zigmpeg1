@@ -1,5 +1,6 @@
 const std = @import("std");
 const bitReader = @import("bitReader.zig").bitReader;
+const vlc = @import("variable_length_codes.zig");
 
 const assert = std.debug.assert;
 
@@ -45,8 +46,6 @@ fn toCode(code: u8) start_codes {
 
 fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
     const debug = true;
-    // read for bit fixed
-    // ...
     if (debug) std.log.debug("Processing Pack", .{});
     _ = try bit_reader.readBits(4); // pack  bits
 
@@ -95,7 +94,6 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
 
     header_length -= 6;
 
-    // this causes an annoying issue where we get an extra byte
     while (header_length != 0) : (header_length -= 3) {
         data.stream_id = @intCast(try bit_reader.readBits(8));
         if (debug) std.log.debug("stream_id {b}", .{data.stream_id});
@@ -224,9 +222,41 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
         data.extra_information_slice = @intCast(try bit_reader.readBits(5));
     }
     _ = try bit_reader.readBits(1);
-    // macroblock
+
+    try processMacroblock(data, bit_reader);
 
     bit_reader.flushBits();
+}
+
+pub fn readVLC(bit_reader: *bitReader) !u8 {
+    const bits = try bit_reader.peekBits(11);
+
+    return vlc.fast_table[bits];
+}
+
+pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
+    // 11 bit mb stuffing
+    // mb address is index of macroblock in the picture
+    // index are in raster scan order starting from 0 in top left
+    // at start, initialized to -1
+    // mb address increment horizontal position of the first macroblock
+    // for other macroblocks in same slice, inc > 1 means skips
+    // if > 33 increment address by 33 + appropriate code
+
+    _ = data;
+
+    while (try bit_reader.peekBits(11) == 0x1111) {
+        bit_reader.consumeBits(11);
+    }
+
+    var increment: u32 = 0;
+
+    while (try bit_reader.peekBits(11) == 0x1000) {
+        bit_reader.consumeBits(11);
+        increment += 33;
+    }
+
+    increment += try readVLC(bit_reader);
 }
 
 pub const mpeg = struct {
@@ -336,7 +366,7 @@ pub fn main() !void {
                 },
                 .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
                 .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
-                .slice_start_1 => {},
+                .slice_start_1 => try processSlice(&global_mpeg, &bit_reader),
 
                 .padding_stream => {
                     std.log.debug("padding stream, breaking loop", .{});
