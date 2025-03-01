@@ -228,10 +228,10 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
     bit_reader.flushBits();
 }
 
-pub fn readVLC(bit_reader: *bitReader) !u8 {
-    const bits = try bit_reader.peekBits(11);
-
-    return vlc.fast_table[bits];
+pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u8 {
+    const bits = try bit_reader.peekBits(@intCast(lookup.bit_length));
+    bit_reader.consumeBits(@intCast(lookup.lengths[bits]));
+    return lookup.table[bits];
 }
 
 pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
@@ -255,8 +255,10 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
         bit_reader.consumeBits(11);
         increment += 33;
     }
+    increment += try readVLC(vlc.mb_address_increment_lookup, bit_reader);
+    const mb_type = try readVLC(vlc.mb_type_I_lookup, bit_reader);
 
-    increment += try readVLC(bit_reader);
+    std.log.debug("mb_type {}", .{mb_type});
 }
 
 pub const mpeg = struct {

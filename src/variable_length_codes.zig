@@ -7,6 +7,68 @@ pub const VariableLengthCode = struct {
     length: u8,
 };
 
+pub const CodeLookup = struct {
+    bit_length: u6,
+    table: []const u8,
+    lengths: []const u8,
+};
+
+const mb_type_I_vlc: [2]VariableLengthCode = .{
+    .{ .code = 0b1, .value = 0b10000, .length = 1 },
+    .{ .code = 0b01, .value = 0b10000, .length = 2 },
+};
+const mb_type_I_tables = generateLookupTables(&mb_type_I_vlc, 2);
+
+pub const mb_type_I_lookup: CodeLookup = .{
+    .bit_length = 2,
+    .table = &mb_type_I_tables.table,
+    .lengths = &mb_type_I_tables.lengths,
+};
+
+pub const mb_type_P_vlc: [7]VariableLengthCode = .{
+    .{ .code = 0b001, .value = 0b00000, .length = 3 },
+    .{ .code = 0b01, .value = 0b01000, .length = 2 },
+    .{ .code = 0b00001, .value = 0b01000, .length = 5 },
+    .{ .code = 0b1, .value = 0b01000, .length = 1 },
+    .{ .code = 0b00010, .value = 0b01000, .length = 5 },
+    .{ .code = 0b00001, .value = 0b10000, .length = 5 },
+    .{ .code = 0b0010, .value = 0b00000, .length = 4 },
+};
+
+const mb_type_P_tables = generateLookupTables(&mb_type_P_vlc, 2);
+
+pub const mb_type_P_struct: CodeLookup = .{
+    .bit_length = 5,
+    .table = &mb_type_P_tables.table,
+    .lengths = &&mb_type_P_tables.lengths,
+};
+
+pub const mb_type_B_vlc: [10]VariableLengthCode = .{
+    .{ .code = 0b010, .value = 0b00001, .length = 3 },
+    .{ .code = 0b10, .value = 0b00001, .length = 2 },
+    .{ .code = 0b0011, .value = 0b01000, .length = 4 },
+    .{ .code = 0b000011, .value = 0b01000, .length = 6 },
+    .{ .code = 0b011, .value = 0b01100, .length = 3 },
+    .{ .code = 0b000010, .value = 0b01100, .length = 6 },
+    .{ .code = 0b11, .value = 0b01100, .length = 2 },
+    .{ .code = 0b00010, .value = 0b01100, .length = 5 },
+    .{ .code = 0b00011, .value = 0b10000, .length = 5 },
+    .{ .code = 0b000001, .value = 0b10000, .length = 6 },
+};
+
+const mb_type_B_tables = generateLookupTables(&mb_type_B_vlc, 6);
+
+pub const mb_type_B_struct: CodeLookup = .{
+    .bit_length = 5,
+    .table = &mb_type_B_tables.table,
+    .lengths = &mb_type_B_tables.lengths,
+};
+
+// let's not support this...
+pub const mb_type_D_vlc: [1]VariableLengthCode = .{
+    .{ .code = 0b1, .value = 0b10000, .length = 1 },
+};
+
 pub const mb_address_increment_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b0000_0011_000, .value = 33, .length = 11 },
     .{ .code = 0b0000_0011_001, .value = 32, .length = 11 },
@@ -43,26 +105,34 @@ pub const mb_address_increment_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b1, .value = 1, .length = 1 },
 };
 
-pub fn generateFastLookup(vlc_table: [33]VariableLengthCode) [1 << FAST_BITS]u8 {
-    var table: [1 << FAST_BITS]u8 = @splat(255);
+pub const address_increment_tables = generateLookupTables(&mb_address_increment_vlc, FAST_BITS);
+
+pub const mb_address_increment_lookup: CodeLookup = .{
+    .bit_length = 11,
+    .table = &address_increment_tables.table,
+    .lengths = &address_increment_tables.lengths,
+};
+
+pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits: usize) struct { table: [1 << bits]u8, lengths: [1 << bits]u8 } {
+    var table: [1 << bits]u8 = @splat(255);
+    var lengths: [1 << bits]u8 = @splat(0);
 
     @setEvalBranchQuota(5000);
     for (0..vlc_table.len) |i| {
         const entry = vlc_table[i];
         const code = entry.code;
         const value = entry.value;
-        const length = entry.length;
+        const bit_length = entry.length;
 
-        const first_index = code << FAST_BITS - @as(u4, @intCast(length));
+        const first_index = code << bits - @as(u4, @intCast(bit_length));
 
-        const num_entries = @as(usize, 1) << @as(u4, @intCast(FAST_BITS - length));
+        const num_entries = @as(usize, 1) << @as(u4, @intCast(bits - bit_length));
 
         for (0..num_entries) |index| {
             std.debug.assert(table[first_index + index] == 255);
             table[first_index + index] = value;
+            lengths[first_index + index] = bit_length;
         }
     }
-    return table;
+    return .{ .table = table, .lengths = lengths };
 }
-
-pub const fast_table = generateFastLookup(mb_address_increment_vlc);
