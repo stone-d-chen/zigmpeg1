@@ -1,5 +1,4 @@
 const std = @import("std");
-const FAST_BITS = 11;
 
 pub const VariableLengthCode = struct {
     code: u24,
@@ -7,6 +6,8 @@ pub const VariableLengthCode = struct {
     length: u8,
 };
 
+//@todo: currently the lengths table is pretty large e.g. for address increment it's 2048 but we could also just store
+// values many (33) and just map to length directly
 pub const CodeLookup = struct {
     bit_length: u6,
     table: []const u8,
@@ -35,7 +36,7 @@ pub const mb_type_P_vlc: [7]VariableLengthCode = .{
     .{ .code = 0b0010, .value = 0b00000, .length = 4 },
 };
 
-const mb_type_P_tables = generateLookupTables(&mb_type_P_vlc, 2);
+const mb_type_P_tables = generateLookupTables(&mb_type_P_vlc, 5);
 
 pub const mb_type_P_struct: CodeLookup = .{
     .bit_length = 5,
@@ -59,15 +60,15 @@ pub const mb_type_B_vlc: [10]VariableLengthCode = .{
 const mb_type_B_tables = generateLookupTables(&mb_type_B_vlc, 6);
 
 pub const mb_type_B_struct: CodeLookup = .{
-    .bit_length = 5,
+    .bit_length = 6,
     .table = &mb_type_B_tables.table,
     .lengths = &mb_type_B_tables.lengths,
 };
 
 // let's not support this...
-pub const mb_type_D_vlc: [1]VariableLengthCode = .{
-    .{ .code = 0b1, .value = 0b10000, .length = 1 },
-};
+// pub const mb_type_D_vlc: [1]VariableLengthCode = .{
+//     .{ .code = 0b1, .value = 0b10000, .length = 1 },
+// };
 
 pub const mb_address_increment_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b0000_0011_000, .value = 33, .length = 11 },
@@ -105,7 +106,7 @@ pub const mb_address_increment_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b1, .value = 1, .length = 1 },
 };
 
-pub const address_increment_tables = generateLookupTables(&mb_address_increment_vlc, FAST_BITS);
+pub const address_increment_tables = generateLookupTables(&mb_address_increment_vlc, 11);
 
 pub const mb_address_increment_lookup: CodeLookup = .{
     .bit_length = 11,
@@ -113,6 +114,8 @@ pub const mb_address_increment_lookup: CodeLookup = .{
     .lengths = &address_increment_tables.lengths,
 };
 
+// @todo just return a struct that also contains the bit length...probably easier...
+// we can calculate the size of the table at comptime based on the max length.
 pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits: usize) struct { table: [1 << bits]u8, lengths: [1 << bits]u8 } {
     var table: [1 << bits]u8 = @splat(255);
     var lengths: [1 << bits]u8 = @splat(0);
