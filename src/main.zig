@@ -243,8 +243,6 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
     // for other macroblocks in same slice, inc > 1 means skips
     // if > 33 increment address by 33 + appropriate code
 
-    _ = data;
-
     while (try bit_reader.peekBits(11) == 0x1111) {
         bit_reader.consumeBits(11);
     }
@@ -255,10 +253,43 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
         bit_reader.consumeBits(11);
         increment += 33;
     }
-    increment += try readVLC(vlc.mb_address_increment_lookup, bit_reader);
-    const mb_type = try readVLC(vlc.mb_type_I_lookup, bit_reader);
+    increment += @intCast(try readVLC(vlc.mb_address_increment_lookup, bit_reader));
+    const mb_type: u8 = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
 
-    std.log.debug("mb_type {}", .{mb_type});
+    const mb_quant = mb_type & 0b00001;
+    const mb_motion_forward = mb_type & 0b00010;
+    const mb_motion_backward = mb_type & 0b00100;
+    const mb_block_pattern = mb_type & 0b01000;
+    const mb_block_intra = mb_type & 0b10000;
+    _ = mb_block_intra;
+
+    const testbits: u24 = 0b0000_0100_110;
+    const mybits: i8 = @bitCast(try readVLCBits(vlc.mb_motion_vector_lookup, testbits));
+    std.log.debug("mb_type {}", .{mybits});
+    std.log.debug("mb_type {}", .{mybits});
+    std.log.debug("mb_type {}", .{mybits});
+    std.log.debug("mb_type {}", .{mybits});
+    std.log.debug("mb_type {}", .{mybits});
+    std.log.debug("mb_type {}", .{mybits});
+
+    if (mb_quant != 0) {
+        data.quantizer_scale = @intCast(try bit_reader.readBits(5));
+    }
+    if (mb_motion_forward != 0) {
+        // motion forward vlc
+    }
+
+    if (mb_motion_backward != 0) {
+        //
+    }
+    if (mb_block_pattern != 0) {
+        // coded_block_pattern
+    }
+
+    // process 6 blocks
+    //
+
+    std.log.debug("mb_type {b}", .{mb_type});
 }
 
 pub const mpeg = struct {
