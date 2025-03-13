@@ -185,12 +185,13 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
     std.log.debug(
         \\--- Sequence Header ---
         \\  {} x {}
-        \\  pel_aspect_ratio: {} \n
+        \\  pel_aspect_ratio: {}
         \\  bit_rate: {x}
         \\  vbv_buffer_size: {}
         \\  constrained_parameter_flag: {}
         \\  load_intra_quantizer_matrix: {}
         \\  load_non_intra_quantizer_matrix: {}
+        \\
     , .{
         data.horizontal_size,
         data.vertical_size,
@@ -206,10 +207,23 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
 }
 
 pub fn processGroupOfPictures(data: *mpeg, bit_reader: *bitReader) !void {
-    std.log.debug("processGroupOfPictures", .{});
     data.time_code = @intCast(try bit_reader.readBits(25));
     data.closed_gop = @intCast(try bit_reader.readBits(1));
     data.broken_link = @intCast(try bit_reader.readBits(1));
+
+    std.log.debug(
+        \\--- Group of Pictures ---
+        \\  time_code: {b}
+        \\  closed_gop: {}
+        \\  broken_link: {}
+        \\
+    , .{
+        data.time_code,
+        data.closed_gop,
+        data.broken_link,
+    });
+
+    assert(bit_reader.bit_count == 5); // 5 marker bits left
     bit_reader.flushBits();
 }
 
@@ -244,6 +258,9 @@ pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
 
 pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
     data.quantizer_scale = @intCast(try bit_reader.readBits(5));
+
+    // @todo: init to 0 somewhere else
+    data.extra_information_slice = 0;
     while (try bit_reader.peekBits(1) == 1) {
         _ = try bit_reader.readBits(1);
         data.extra_information_slice = @intCast(try bit_reader.readBits(5));
@@ -252,6 +269,17 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
 
     try processMacroblock(data, bit_reader);
 
+    std.log.debug(
+        \\--- Slice Header ---
+        \\  quantizer_scale: {}
+        \\  extra_information_slice: {}
+        \\
+    , .{
+        data.quantizer_scale,
+        data.extra_information_slice,
+    });
+
+    // we might have junk because processMacroblock isn't fully implemented
     bit_reader.flushBits();
 }
 
@@ -267,7 +295,6 @@ pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u8 {
 }
 
 pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
-    std.log.debug("processMacroblock ", .{});
     // 11 bit mb stuffing
     // mb address is index of macroblock in the picture
     // index are in raster scan order starting from 0 in top left
@@ -304,13 +331,6 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
     const mb_motion_backward = mb_type & 0b00100;
     const mb_block_pattern = mb_type & 0b01000;
     const mb_block_intra = mb_type & 0b10000;
-
-    std.log.debug("mb_type {b:05}", .{mb_type});
-    std.log.debug("mb_quant {b}", .{mb_quant});
-    std.log.debug("mb_motion_forward {b}", .{mb_motion_forward});
-    std.log.debug("mb_motion_backward {b}", .{mb_motion_backward});
-    std.log.debug("mb_block_pattern {b:06}", .{mb_block_pattern});
-    std.log.debug("mb_block_intra {b}", .{mb_block_intra});
 
     if (mb_quant != 0) {
         data.quantizer_scale = @intCast(try bit_reader.readBits(5));
@@ -358,7 +378,26 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
     if (mb_block_pattern != 0) {
         mb_coded_block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
     }
-    std.log.debug("mb_coded_block_pattern {b}", .{mb_coded_block_pattern});
+
+    std.log.debug(
+        \\--- Macroblock Header ---
+        \\  mb_type: {b:05}
+        \\  mb_quant: {b},
+        \\  mb_motion_forward: {b},
+        \\  mb_motion_backward: {b},
+        \\  mb_block_pattern: {b:06}
+        \\  mb_block_intra: {b},
+        \\  mb_coded_block_pattern: {b}
+        \\
+    , .{
+        mb_type,
+        mb_quant,
+        mb_motion_forward,
+        mb_motion_backward,
+        mb_block_pattern,
+        mb_block_intra,
+        mb_coded_block_pattern,
+    });
 
     // process 6 blocks
     //
@@ -460,7 +499,7 @@ pub fn main() !void {
         if (byte0 == 0x00 and byte1 == 0x00 and byte2 == 0x01) {
             const code = try reader.readByte();
             const codeenum = toCode(code);
-            if (true) std.log.debug("Found a start code {x}", .{code});
+            if (false) std.log.debug("Found a start code {x}", .{code});
 
             switch (codeenum) {
                 .pack_start => try processPack(&global_mpeg, &bit_reader),
