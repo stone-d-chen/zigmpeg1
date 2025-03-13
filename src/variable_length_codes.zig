@@ -14,7 +14,7 @@ pub const CodeLookup = struct {
     lengths: []const u8,
 };
 
-pub const mb_motion_vector_vlc: [33]VariableLengthCode = .{
+const mb_motion_vector_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b1, .value = 0, .length = 1 },
     .{ .code = 0b010, .value = 1, .length = 3 },
     .{ .code = 0b0010, .value = 2, .length = 4 },
@@ -71,7 +71,7 @@ pub const mb_type_I_lookup: CodeLookup = .{
 };
 
 // @todo I need to check all of these.... ai is useless
-pub const mb_type_P_vlc: [7]VariableLengthCode = .{
+const mb_type_P_vlc: [7]VariableLengthCode = .{
     .{ .code = 0b001, .value = 0b00010, .length = 3 },
     .{ .code = 0b01, .value = 0b01000, .length = 2 },
     .{ .code = 0b0000_1, .value = 0b01001, .length = 5 },
@@ -83,13 +83,13 @@ pub const mb_type_P_vlc: [7]VariableLengthCode = .{
 
 const mb_type_P_tables = generateLookupTables(&mb_type_P_vlc, getMaxLength(&mb_type_P_vlc));
 
-pub const mb_type_P_struct: CodeLookup = .{
+pub const mb_type_P_lookup: CodeLookup = .{
     .bit_length = mb_type_P_tables.bit_length,
     .table = &mb_type_P_tables.table,
     .lengths = &mb_type_P_tables.lengths,
 };
 
-pub const mb_type_B_vlc: [10]VariableLengthCode = .{
+const mb_type_B_vlc: [10]VariableLengthCode = .{
     .{ .code = 0b010, .value = 0b00001, .length = 3 },
     .{ .code = 0b10, .value = 0b00001, .length = 2 },
     .{ .code = 0b0011, .value = 0b01000, .length = 4 },
@@ -104,8 +104,8 @@ pub const mb_type_B_vlc: [10]VariableLengthCode = .{
 
 const mb_type_B_tables = generateLookupTables(&mb_type_B_vlc, getMaxLength(&mb_type_B_vlc));
 
-pub const mb_type_B_struct: CodeLookup = .{
-    .bit_length = mb_type_B_tables.lengths,
+pub const mb_type_B_lookup: CodeLookup = .{
+    .bit_length = mb_type_B_tables.bit_length,
     .table = &mb_type_B_tables.table,
     .lengths = &mb_type_B_tables.lengths,
 };
@@ -115,7 +115,7 @@ pub const mb_type_B_struct: CodeLookup = .{
 //     .{ .code = 0b1, .value = 0b10000, .length = 1 },
 // };
 
-pub const mb_address_increment_vlc: [33]VariableLengthCode = .{
+const mb_address_increment_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b0000_0011_000, .value = 33, .length = 11 },
     .{ .code = 0b0000_0011_001, .value = 32, .length = 11 },
     .{ .code = 0b0000_0011_010, .value = 31, .length = 11 },
@@ -160,6 +160,48 @@ pub const mb_address_increment_lookup: CodeLookup = .{
 };
 
 // something annoying it seems like anonymous structs can't take comptime defined variables
+
+const mb_coded_block_pattern_vlc: [31]VariableLengthCode = .{
+    .{ .code = 0b0101_1, .value = 1, .length = 5 },
+    .{ .code = 0b0100_1, .value = 2, .length = 5 },
+    .{ .code = 0b0011_01, .value = 3, .length = 6 },
+    .{ .code = 0b1101, .value = 4, .length = 4 },
+    .{ .code = 0b0010_111, .value = 5, .length = 7 },
+    .{ .code = 0b0010_011, .value = 6, .length = 7 },
+    .{ .code = 0b0001_1111, .value = 7, .length = 8 },
+    .{ .code = 0b1100, .value = 8, .length = 4 },
+    .{ .code = 0b0010_110, .value = 9, .length = 7 },
+    .{ .code = 0b0010_010, .value = 10, .length = 7 },
+    .{ .code = 0b0001_1110, .value = 11, .length = 8 },
+    .{ .code = 0b1001_1, .value = 12, .length = 5 },
+    .{ .code = 0b0001_1011, .value = 13, .length = 8 },
+    .{ .code = 0b0001_0111, .value = 14, .length = 8 },
+    .{ .code = 0b0001_0011, .value = 15, .length = 8 },
+    .{ .code = 0b1011, .value = 16, .length = 4 },
+    .{ .code = 0b0010_101, .value = 17, .length = 7 },
+    .{ .code = 0b0010_001, .value = 18, .length = 7 },
+    .{ .code = 0b0001_1101, .value = 19, .length = 8 },
+    .{ .code = 0b1000_1, .value = 20, .length = 5 },
+    .{ .code = 0b0001_1001, .value = 21, .length = 8 },
+    .{ .code = 0b0001_0101, .value = 22, .length = 8 },
+    .{ .code = 0b0001_0001, .value = 23, .length = 8 },
+    .{ .code = 0b0011_11, .value = 24, .length = 6 },
+    .{ .code = 0b0000_1111, .value = 25, .length = 8 },
+    .{ .code = 0b0000_1101, .value = 26, .length = 8 },
+    .{ .code = 0b0000_0001_1, .value = 27, .length = 9 },
+    .{ .code = 0b0111_1, .value = 28, .length = 5 },
+    .{ .code = 0b0000_1011, .value = 29, .length = 8 },
+    .{ .code = 0b0000_0111, .value = 30, .length = 8 },
+    .{ .code = 0b0000_0011_1, .value = 31, .length = 9 },
+};
+
+const mb_coded_block_pattern_tables = generateLookupTables(&mb_coded_block_pattern_vlc, getMaxLength(&mb_coded_block_pattern_vlc));
+
+pub const mb_coded_block_pattern_lookup: CodeLookup = .{
+    .bit_length = mb_coded_block_pattern_tables.bit_length,
+    .table = &mb_coded_block_pattern_tables.table,
+    .lengths = &mb_coded_block_pattern_tables.lengths,
+};
 
 fn getMaxLength(vlc_table: []const VariableLengthCode) u8 {
     var max_bit_length: u8 = 0;

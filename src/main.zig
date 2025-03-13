@@ -33,6 +33,14 @@ const start_codes = enum(u8) {
     video_stream_15 = 0xEF,
 };
 
+const picture_types = enum(u8) {
+    forbidden = 0b000,
+    I = 1,
+    P = 2,
+    B = 3,
+    D = 4,
+};
+
 const stream_ids = enum(u8) {
     video = 0b1110_0000,
     audio = 0b1100_0000,
@@ -182,6 +190,7 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
 }
 
 pub fn processGroupOfPictures(data: *mpeg, bit_reader: *bitReader) !void {
+    std.log.debug("processGroupOfPictures", .{});
     data.time_code = @intCast(try bit_reader.readBits(25));
     data.closed_gop = @intCast(try bit_reader.readBits(1));
     data.broken_link = @intCast(try bit_reader.readBits(1));
@@ -189,6 +198,8 @@ pub fn processGroupOfPictures(data: *mpeg, bit_reader: *bitReader) !void {
 }
 
 pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
+    std.log.debug("processPicture", .{});
+
     data.temporal_reference = @intCast(try bit_reader.readBits(10));
     data.picture_coding_type = @intCast(try bit_reader.readBits(3));
     data.vbv_delay = @intCast(try bit_reader.readBits(16));
@@ -228,13 +239,19 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
     bit_reader.flushBits();
 }
 
-pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u8 {
-    const bits = try bit_reader.peekBits(@intCast(lookup.bit_length));
-    bit_reader.consumeBits(@intCast(lookup.lengths[bits]));
+pub fn readVLCBits(lookup: vlc.CodeLookup, bits: anytype) !u8 {
     return lookup.table[bits];
 }
 
+pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u8 {
+    const bits = try bit_reader.peekBits(@intCast(lookup.bit_length));
+    bit_reader.consumeBits(@intCast(lookup.lengths[bits]));
+    const result = lookup.table[bits];
+    return result;
+}
+
 pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
+    std.log.debug("processMacroblock ", .{});
     // 11 bit mb stuffing
     // mb address is index of macroblock in the picture
     // index are in raster scan order starting from 0 in top left
@@ -254,42 +271,82 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
         increment += 33;
     }
     increment += @intCast(try readVLC(vlc.mb_address_increment_lookup, bit_reader));
-    const mb_type: u8 = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+
+    const picture_type: picture_types = @enumFromInt(data.picture_coding_type);
+    var mb_type_vlc: vlc.CodeLookup = undefined;
+    switch (picture_type) {
+        .I => mb_type_vlc = vlc.mb_type_I_lookup,
+        .P => mb_type_vlc = vlc.mb_type_P_lookup,
+        .B => mb_type_vlc = vlc.mb_type_B_lookup,
+        .forbidden, .D => unreachable,
+    }
+
+    const mb_type: u8 = try readVLC(mb_type_vlc, bit_reader);
 
     const mb_quant = mb_type & 0b00001;
     const mb_motion_forward = mb_type & 0b00010;
     const mb_motion_backward = mb_type & 0b00100;
     const mb_block_pattern = mb_type & 0b01000;
     const mb_block_intra = mb_type & 0b10000;
-    _ = mb_block_intra;
 
-    const testbits: u24 = 0b0000_0100_110;
-    const mybits: i8 = @bitCast(try readVLCBits(vlc.mb_motion_vector_lookup, testbits));
-    std.log.debug("mb_type {}", .{mybits});
-    std.log.debug("mb_type {}", .{mybits});
-    std.log.debug("mb_type {}", .{mybits});
-    std.log.debug("mb_type {}", .{mybits});
-    std.log.debug("mb_type {}", .{mybits});
-    std.log.debug("mb_type {}", .{mybits});
+    std.log.debug("mb_type {b:05}", .{mb_type});
+    std.log.debug("mb_quant {b}", .{mb_quant});
+    std.log.debug("mb_motion_forward {b}", .{mb_motion_forward});
+    std.log.debug("mb_motion_backward {b}", .{mb_motion_backward});
+    std.log.debug("mb_block_pattern {b:06}", .{mb_block_pattern});
+    std.log.debug("mb_block_intra {b}", .{mb_block_intra});
 
     if (mb_quant != 0) {
         data.quantizer_scale = @intCast(try bit_reader.readBits(5));
     }
+
+    var mb_horizontal_forward_code: u8 = undefined;
+    var mb_horizontal_forward_r: u8 = undefined;
+    var mb_vertical_forward_code: u8 = undefined;
+    var mb_vertical_forward_r: u8 = undefined;
+
     if (mb_motion_forward != 0) {
-        // motion forward vlc
+        mb_horizontal_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        // @todo need to check if this is set, what are the possible values?
+        if (data.forward_f_code > 1 and mb_horizontal_forward_code != 0) {
+            mb_horizontal_forward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        }
+
+        mb_vertical_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+
+        if (data.forward_f_code > 1 and mb_vertical_forward_code != 0) {
+            mb_vertical_forward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        }
     }
 
+    var mb_horizontal_backward_code: u8 = undefined;
+    var mb_horizontal_backward_r: u8 = undefined;
+    var mb_vertical_backward_code: u8 = undefined;
+    var mb_vertical_backward_r: u8 = undefined;
+
     if (mb_motion_backward != 0) {
-        //
+        mb_horizontal_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        // @todo need to check if this is set, what are the possible values?
+        if (data.backward_f_code > 1 and mb_horizontal_backward_code != 0) {
+            mb_horizontal_backward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        }
+
+        mb_vertical_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+
+        if (data.backward_f_code > 1 and mb_vertical_backward_code != 0) {
+            mb_vertical_backward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        }
     }
+
+    var mb_coded_block_pattern: u8 = undefined;
     if (mb_block_pattern != 0) {
-        // coded_block_pattern
+        mb_coded_block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
     }
+    std.log.debug("mb_coded_block_pattern {b}", .{mb_coded_block_pattern});
 
     // process 6 blocks
     //
-
-    std.log.debug("mb_type {b}", .{mb_type});
+    bit_reader.flushBits();
 }
 
 pub const mpeg = struct {
@@ -385,10 +442,9 @@ pub fn main() !void {
 
     while (true) {
         if (byte0 == 0x00 and byte1 == 0x00 and byte2 == 0x01) {
-            if (false) std.log.debug("Found a start code", .{});
-
             const code = try reader.readByte();
             const codeenum = toCode(code);
+            if (true) std.log.debug("Found a start code {x}", .{code});
 
             switch (codeenum) {
                 .pack_start => try processPack(&global_mpeg, &bit_reader),
@@ -400,7 +456,10 @@ pub fn main() !void {
                 .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
                 .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
                 .slice_start_1 => try processSlice(&global_mpeg, &bit_reader),
-
+                .sequence_end => {
+                    std.log.debug("Sequence End", .{});
+                    return;
+                },
                 .padding_stream => {
                     std.log.debug("padding stream, breaking loop", .{});
                     break;
