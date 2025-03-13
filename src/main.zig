@@ -154,8 +154,6 @@ pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
 }
 
 pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
-    std.log.debug("sequence header", .{});
-
     data.horizontal_size = @intCast(try bit_reader.readBits(12));
     data.vertical_size = @intCast(try bit_reader.readBits(12));
 
@@ -184,7 +182,25 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
         }
     }
 
-    std.log.debug("{} x {}", .{ data.horizontal_size, data.vertical_size });
+    std.log.debug(
+        \\--- Sequence Header ---
+        \\  {} x {}
+        \\  pel_aspect_ratio: {} \n
+        \\  bit_rate: {x}
+        \\  vbv_buffer_size: {}
+        \\  constrained_parameter_flag: {}
+        \\  load_intra_quantizer_matrix: {}
+        \\  load_non_intra_quantizer_matrix: {}
+    , .{
+        data.horizontal_size,
+        data.vertical_size,
+        data.pel_aspect_ratio,
+        data.bit_rate,
+        data.vbv_buffer_size,
+        data.constrained_parameters_flag,
+        data.load_intra_quantizer_matrix,
+        data.load_non_intra_quantizer_matrix,
+    });
 
     assert(bit_reader.bit_count == 0);
 }
