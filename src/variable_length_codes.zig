@@ -60,7 +60,7 @@ pub const mb_motion_vector_lookup: CodeLookup = .{
 
 const mb_type_I_vlc: [2]VariableLengthCode = .{
     .{ .code = 0b1, .value = 0b10000, .length = 1 },
-    .{ .code = 0b01, .value = 0b10000, .length = 2 },
+    .{ .code = 0b01, .value = 0b10001, .length = 2 },
 };
 const mb_type_I_tables = generateLookupTables(&mb_type_I_vlc, getMaxLength(&mb_type_I_vlc));
 
