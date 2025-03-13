@@ -4,7 +4,7 @@ pub const bitReader = struct {
     const Self = @This();
     bit_buffer: u64 = 0,
     bit_count: u6 = 0,
-    source: std.io.StreamSource, // this is kind of annoying, probably want an internal type?
+    source: *std.io.StreamSource, // this is kind of annoying, probably want an internal type?
 
     pub fn peekBits(self: *Self, num_bits: u6) !u64 {
         try self.fillBits(num_bits);

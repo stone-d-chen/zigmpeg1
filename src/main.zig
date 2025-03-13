@@ -431,7 +431,7 @@ pub fn main() !void {
     var stream = std.io.StreamSource{ .file = file };
     var reader = stream.reader();
 
-    var bit_reader: bitReader = .{ .source = stream };
+    var bit_reader: bitReader = .{ .source = &stream };
 
     var byte0 = try reader.readByte();
     var byte1 = try reader.readByte();
