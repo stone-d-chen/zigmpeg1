@@ -288,8 +288,6 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
     }
     _ = try bit_reader.readBits(1);
 
-    try processMacroblock(data, bit_reader);
-
     std.log.debug(
         \\--- Slice Header ---
         \\  quantizer_scale: {}
@@ -299,6 +297,8 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
         data.quantizer_scale,
         data.extra_information_slice,
     });
+
+    try processMacroblocks(data, bit_reader);
 
     // we might have junk because processMacroblock isn't fully implemented
     bit_reader.flushBits();
@@ -315,7 +315,7 @@ pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u8 {
     return result;
 }
 
-pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
+pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
     // 11 bit mb stuffing
     // mb address is index of macroblock in the picture
     // index are in raster scan order starting from 0 in top left
@@ -351,7 +351,7 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
     const mb_motion_forward = mb_type & 0b00010;
     const mb_motion_backward = mb_type & 0b00100;
     const mb_block_pattern = mb_type & 0b01000;
-    const mb_block_intra = mb_type & 0b10000;
+    data.mb_intra = mb_type & 0b10000;
 
     if (mb_quant != 0) {
         data.quantizer_scale = @intCast(try bit_reader.readBits(5));
@@ -395,9 +395,11 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
         }
     }
 
-    var mb_coded_block_pattern: u8 = undefined;
+    // @todo don't really understand the block pattern stuff
     if (mb_block_pattern != 0) {
-        mb_coded_block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
+        data.block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
+    } else if (data.mb_intra != 0) {
+        data.block_pattern = 0b1111_11;
     }
 
     std.log.debug(
@@ -409,9 +411,9 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
         \\      quantizer_scale: {}
         \\  mb_motion_forward: {b}
         \\  mb_motion_backward: {b}
-        \\  mb_block_pattern: {b:06}
         \\  mb_block_intra: {b}
-        \\  mb_coded_block_pattern: {b}
+        \\  mb_coded_block_pattern: {b:06}
+        \\      mb_block_pattern: {b}
         \\
     , .{
         increment,
@@ -421,14 +423,24 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
         data.quantizer_scale,
         mb_motion_forward,
         mb_motion_backward,
+        data.mb_intra,
         mb_block_pattern,
-        mb_block_intra,
-        mb_coded_block_pattern,
+        data.block_pattern,
     });
 
-    // process 6 blocks
-    //
+    try processBlocks(data, bit_reader);
     bit_reader.flushBits();
+}
+
+fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
+    const coded_block_pattern = data.block_pattern;
+    for (0..6) |block_idx| {
+        const block_coded: u8 = coded_block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
+        if (block_coded != 0) {
+            std.log.debug("coded {}", .{block_idx});
+        }
+    }
+    _ = bit_reader;
 }
 
 pub const mpeg = struct {
@@ -499,9 +511,13 @@ pub const mpeg = struct {
     extra_bit_picture2: u1,
     // extension etc
 
-    //
+    // slice
     quantizer_scale: u5,
     extra_information_slice: u8,
+
+    // macroblock
+    block_pattern: u8,
+    mb_intra: u8,
 };
 
 pub fn main() !void {
