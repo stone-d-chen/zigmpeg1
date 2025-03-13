@@ -31,10 +31,18 @@ const start_codes = enum(u8) {
 
     video_stream_0 = 0xE0,
     video_stream_15 = 0xEF,
+
+    pub fn isSliceCode(self: @This()) bool {
+        const slice_start_1: u8 = @intFromEnum(start_codes.slice_start_1);
+        const slice_start_175: u8 = @intFromEnum(start_codes.slice_start_175);
+        const current_code: u8 = @intFromEnum(self);
+        const result = slice_start_1 <= current_code and current_code <= slice_start_175;
+        return result;
+    }
 };
 
 const picture_types = enum(u8) {
-    forbidden = 0b000,
+    forbidden = 0,
     I = 1,
     P = 2,
     B = 3,
@@ -228,8 +236,6 @@ pub fn processGroupOfPictures(data: *mpeg, bit_reader: *bitReader) !void {
 }
 
 pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
-    std.log.debug("processPicture", .{});
-
     data.temporal_reference = @intCast(try bit_reader.readBits(10));
     data.picture_coding_type = @intCast(try bit_reader.readBits(3));
     data.vbv_delay = @intCast(try bit_reader.readBits(16));
@@ -253,6 +259,21 @@ pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
 
     // @todo extension
     // @todo user data
+
+    std.log.debug(
+        \\--- Picture Header ---
+        \\  temporal_reference: {}
+        \\  picture_coding_type: {}
+        \\  vbv_delay: {x}
+        \\  extra_bit_picture: {}
+        \\
+    , .{
+        data.temporal_reference,
+        @as(picture_types, @enumFromInt(data.picture_coding_type)),
+        data.vbv_delay,
+        data.extra_bit_picture,
+    });
+    std.debug.assert(bit_reader.bit_count == 2);
     bit_reader.flushBits();
 }
 
@@ -381,17 +402,23 @@ pub fn processMacroblock(data: *mpeg, bit_reader: *bitReader) !void {
 
     std.log.debug(
         \\--- Macroblock Header ---
+        \\  increment: {}
         \\  mb_type: {b:05}
-        \\  mb_quant: {b},
-        \\  mb_motion_forward: {b},
-        \\  mb_motion_backward: {b},
+        \\  picture_type: {}
+        \\  mb_quant: {b}
+        \\      quantizer_scale: {}
+        \\  mb_motion_forward: {b}
+        \\  mb_motion_backward: {b}
         \\  mb_block_pattern: {b:06}
-        \\  mb_block_intra: {b},
+        \\  mb_block_intra: {b}
         \\  mb_coded_block_pattern: {b}
         \\
     , .{
+        increment,
         mb_type,
+        picture_type,
         mb_quant,
+        data.quantizer_scale,
         mb_motion_forward,
         mb_motion_backward,
         mb_block_pattern,
@@ -504,13 +531,13 @@ pub fn main() !void {
             switch (codeenum) {
                 .pack_start => try processPack(&global_mpeg, &bit_reader),
                 .system_header_start => try processSystemHeader(&global_mpeg, &bit_reader),
+                .picture_start => try processPicture(&global_mpeg, &bit_reader),
                 .video_stream_0 => {
                     global_mpeg.packet_stream_id = code;
                     try processPacket(&global_mpeg, &bit_reader);
                 },
                 .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
                 .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
-                .slice_start_1 => try processSlice(&global_mpeg, &bit_reader),
                 .sequence_end => {
                     std.log.debug("Sequence End", .{});
                     return;
@@ -519,7 +546,13 @@ pub fn main() !void {
                     std.log.debug("padding stream, breaking loop", .{});
                     break;
                 },
-                else => {},
+                else => {
+                    if (codeenum.isSliceCode()) {
+                        try processSlice(&global_mpeg, &bit_reader);
+                    } else {
+                        unreachable;
+                    }
+                },
             }
 
             byte0 = try reader.readByte();
