@@ -14,6 +14,45 @@ pub const CodeLookup = struct {
     lengths: []const u8,
 };
 
+const dc_code_y_table_vlc: [9]VariableLengthCode = .{
+    .{ .code = 0b100, .value = 0, .length = 3 },
+    .{ .code = 0b00, .value = 1, .length = 2 },
+    .{ .code = 0b01, .value = 2, .length = 2 },
+    .{ .code = 0b101, .value = 3, .length = 3 },
+    .{ .code = 0b110, .value = 4, .length = 3 },
+    .{ .code = 0b1110, .value = 5, .length = 4 },
+    .{ .code = 0b1111_0, .value = 6, .length = 5 },
+    .{ .code = 0b1111_10, .value = 7, .length = 6 },
+    .{ .code = 0b1111_110, .value = 8, .length = 7 },
+};
+
+const dc_code_c_table_vlc: [9]VariableLengthCode = .{
+    .{ .code = 0b00, .value = 0, .length = 2 },
+    .{ .code = 0b01, .value = 1, .length = 2 },
+    .{ .code = 0b10, .value = 2, .length = 2 },
+    .{ .code = 0b110, .value = 3, .length = 3 },
+    .{ .code = 0b1110, .value = 4, .length = 4 },
+    .{ .code = 0b1111_0, .value = 5, .length = 5 },
+    .{ .code = 0b1111_10, .value = 6, .length = 6 },
+    .{ .code = 0b1111_110, .value = 7, .length = 7 },
+    .{ .code = 0b1111_1110, .value = 8, .length = 8 },
+};
+
+const dc_code_y_tables = generateLookupTables(&dc_code_y_table_vlc, getMaxLength(&dc_code_y_table_vlc));
+const dc_code_c_table_tables = generateLookupTables(&dc_code_c_table_vlc, getMaxLength(&dc_code_c_table_vlc));
+
+pub const dc_code_y_lookup: CodeLookup = .{
+    .bit_length = dc_code_y_tables.bit_length,
+    .table = &dc_code_y_tables.table,
+    .lengths = &dc_code_y_tables.lengths,
+};
+
+pub const dc_code_c_lookup: CodeLookup = .{
+    .bit_length = dc_code_c_table_tables.bit_length,
+    .table = &dc_code_c_table_tables.table,
+    .lengths = &dc_code_c_table_tables.lengths,
+};
+
 const mb_motion_vector_vlc: [33]VariableLengthCode = .{
     .{ .code = 0b1, .value = 0, .length = 1 },
     .{ .code = 0b010, .value = 1, .length = 3 },

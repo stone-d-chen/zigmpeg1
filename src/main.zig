@@ -165,6 +165,10 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
     data.horizontal_size = @intCast(try bit_reader.readBits(12));
     data.vertical_size = @intCast(try bit_reader.readBits(12));
 
+    data.frame.y.data = try data.allocator.alloc(u8, data.horizontal_size * data.vertical_size);
+    data.frame.cr.data = try data.allocator.alloc(u8, data.horizontal_size * data.vertical_size);
+    data.frame.cb.data = try data.allocator.alloc(u8, data.horizontal_size * data.vertical_size);
+
     data.pel_aspect_ratio = @intCast(try bit_reader.readBits(4));
     data.picture_rate = @intCast(try bit_reader.readBits(4));
     data.bit_rate = @intCast(try bit_reader.readBits(18));
@@ -324,126 +328,183 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
     // for other macroblocks in same slice, inc > 1 means skips
     // if > 33 increment address by 33 + appropriate code
 
-    while (try bit_reader.peekBits(11) == 0x1111) {
-        bit_reader.consumeBits(11);
-    }
+    const total_macroblocks = data.vertical_size * data.horizontal_size / (16 * 16);
 
-    var increment: u32 = 0;
-
-    while (try bit_reader.peekBits(11) == 0x1000) {
-        bit_reader.consumeBits(11);
-        increment += 33;
-    }
-    increment += @intCast(try readVLC(vlc.mb_address_increment_lookup, bit_reader));
-
-    const picture_type: picture_types = @enumFromInt(data.picture_coding_type);
-    var mb_type_vlc: vlc.CodeLookup = undefined;
-    switch (picture_type) {
-        .I => mb_type_vlc = vlc.mb_type_I_lookup,
-        .P => mb_type_vlc = vlc.mb_type_P_lookup,
-        .B => mb_type_vlc = vlc.mb_type_B_lookup,
-        .forbidden, .D => unreachable,
-    }
-
-    const mb_type: u8 = try readVLC(mb_type_vlc, bit_reader);
-
-    const mb_quant = mb_type & 0b00001;
-    const mb_motion_forward = mb_type & 0b00010;
-    const mb_motion_backward = mb_type & 0b00100;
-    const mb_block_pattern = mb_type & 0b01000;
-    data.mb_intra = mb_type & 0b10000;
-
-    if (mb_quant != 0) {
-        data.quantizer_scale = @intCast(try bit_reader.readBits(5));
-    }
-
-    var mb_horizontal_forward_code: u8 = undefined;
-    var mb_horizontal_forward_r: u8 = undefined;
-    var mb_vertical_forward_code: u8 = undefined;
-    var mb_vertical_forward_r: u8 = undefined;
-
-    if (mb_motion_forward != 0) {
-        mb_horizontal_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
-        // @todo need to check if this is set, what are the possible values?
-        if (data.forward_f_code > 1 and mb_horizontal_forward_code != 0) {
-            mb_horizontal_forward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+    for (0..total_macroblocks) |_| {
+        while (try bit_reader.peekBits(11) == 0x1111) {
+            bit_reader.consumeBits(11);
         }
 
-        mb_vertical_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        var increment: u32 = 0;
 
-        if (data.forward_f_code > 1 and mb_vertical_forward_code != 0) {
-            mb_vertical_forward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        while (try bit_reader.peekBits(11) == 0x1000) {
+            bit_reader.consumeBits(11);
+            increment += 33;
         }
-    }
+        increment += @intCast(try readVLC(vlc.mb_address_increment_lookup, bit_reader));
 
-    var mb_horizontal_backward_code: u8 = undefined;
-    var mb_horizontal_backward_r: u8 = undefined;
-    var mb_vertical_backward_code: u8 = undefined;
-    var mb_vertical_backward_r: u8 = undefined;
-
-    if (mb_motion_backward != 0) {
-        mb_horizontal_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
-        // @todo need to check if this is set, what are the possible values?
-        if (data.backward_f_code > 1 and mb_horizontal_backward_code != 0) {
-            mb_horizontal_backward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        const picture_type: picture_types = @enumFromInt(data.picture_coding_type);
+        var mb_type_vlc: vlc.CodeLookup = undefined;
+        switch (picture_type) {
+            .I => mb_type_vlc = vlc.mb_type_I_lookup,
+            .P => mb_type_vlc = vlc.mb_type_P_lookup,
+            .B => mb_type_vlc = vlc.mb_type_B_lookup,
+            .forbidden, .D => unreachable,
         }
 
-        mb_vertical_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        const mb_type: u8 = try readVLC(mb_type_vlc, bit_reader);
 
-        if (data.backward_f_code > 1 and mb_vertical_backward_code != 0) {
-            mb_vertical_backward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+        const mb_quant = mb_type & 0b00001;
+        const mb_motion_forward = mb_type & 0b00010;
+        const mb_motion_backward = mb_type & 0b00100;
+        const mb_block_pattern = mb_type & 0b01000;
+        data.mb_intra = mb_type & 0b10000;
+
+        if (mb_quant != 0) {
+            data.quantizer_scale = @intCast(try bit_reader.readBits(5));
         }
+
+        var mb_horizontal_forward_code: u8 = undefined;
+        var mb_horizontal_forward_r: u8 = undefined;
+        var mb_vertical_forward_code: u8 = undefined;
+        var mb_vertical_forward_r: u8 = undefined;
+
+        if (mb_motion_forward != 0) {
+            mb_horizontal_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+            // @todo need to check if this is set, what are the possible values?
+            if (data.forward_f_code > 1 and mb_horizontal_forward_code != 0) {
+                mb_horizontal_forward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+            }
+
+            mb_vertical_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+
+            if (data.forward_f_code > 1 and mb_vertical_forward_code != 0) {
+                mb_vertical_forward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+            }
+        }
+
+        var mb_horizontal_backward_code: u8 = undefined;
+        var mb_horizontal_backward_r: u8 = undefined;
+        var mb_vertical_backward_code: u8 = undefined;
+        var mb_vertical_backward_r: u8 = undefined;
+
+        if (mb_motion_backward != 0) {
+            mb_horizontal_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+            // @todo need to check if this is set, what are the possible values?
+            if (data.backward_f_code > 1 and mb_horizontal_backward_code != 0) {
+                mb_horizontal_backward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+            }
+
+            mb_vertical_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+
+            if (data.backward_f_code > 1 and mb_vertical_backward_code != 0) {
+                mb_vertical_backward_r = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
+            }
+        }
+
+        // @todo don't really understand the block pattern stuff
+        if (mb_block_pattern != 0) {
+            data.block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
+        } else if (data.mb_intra != 0) {
+            data.block_pattern = 0b1111_11;
+        }
+
+        std.log.debug(
+            \\--- Macroblock Header ---
+            \\  increment: {}
+            \\  mb_type: {b:05}
+            \\  picture_type: {}
+            \\  mb_quant: {b}
+            \\      quantizer_scale: {}
+            \\  mb_motion_forward: {b}
+            \\  mb_motion_backward: {b}
+            \\  mb_block_intra: {b}
+            \\  mb_coded_block_pattern: {b:06}
+            \\      mb_block_pattern: {b}
+            \\
+        , .{
+            increment,
+            mb_type,
+            picture_type,
+            mb_quant,
+            data.quantizer_scale,
+            mb_motion_forward,
+            mb_motion_backward,
+            data.mb_intra,
+            mb_block_pattern,
+            data.block_pattern,
+        });
+
+        try processBlocks(data, bit_reader);
     }
-
-    // @todo don't really understand the block pattern stuff
-    if (mb_block_pattern != 0) {
-        data.block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
-    } else if (data.mb_intra != 0) {
-        data.block_pattern = 0b1111_11;
+    if (bit_reader.bit_count > 8) {
+        const bytes_remaining: i32 = @intCast(bit_reader.bit_count / 8);
+        try data.stream.seekBy(-1 * bytes_remaining);
     }
-
-    std.log.debug(
-        \\--- Macroblock Header ---
-        \\  increment: {}
-        \\  mb_type: {b:05}
-        \\  picture_type: {}
-        \\  mb_quant: {b}
-        \\      quantizer_scale: {}
-        \\  mb_motion_forward: {b}
-        \\  mb_motion_backward: {b}
-        \\  mb_block_intra: {b}
-        \\  mb_coded_block_pattern: {b:06}
-        \\      mb_block_pattern: {b}
-        \\
-    , .{
-        increment,
-        mb_type,
-        picture_type,
-        mb_quant,
-        data.quantizer_scale,
-        mb_motion_forward,
-        mb_motion_backward,
-        data.mb_intra,
-        mb_block_pattern,
-        data.block_pattern,
-    });
-
-    try processBlocks(data, bit_reader);
     bit_reader.flushBits();
 }
 
 fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
-    const coded_block_pattern = data.block_pattern;
     for (0..6) |block_idx| {
-        const block_coded: u8 = coded_block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
-        if (block_coded != 0) {
-            std.log.debug("coded {}", .{block_idx});
+        const block_coded: u8 = data.block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
+        if (block_coded == 0) continue;
+
+        std.log.debug("coded {}", .{block_idx});
+
+        if (data.mb_intra != 0) {
+            if (block_idx < 4) {
+                const magnitude = @as(u6, @intCast(try readVLC(vlc.dc_code_y_lookup, bit_reader)));
+
+                var diff: u8 = 0;
+                if (magnitude != 0) {
+                    diff = @intCast(try bit_reader.readBits(magnitude));
+                }
+
+                std.log.debug("magnitude {}", .{magnitude});
+
+                data.frame.y.data[block_idx] = diff;
+            } else { // chroma
+                const magnitude = @as(u6, @intCast(try readVLC(vlc.dc_code_c_lookup, bit_reader)));
+
+                var diff: u8 = 0;
+                if (magnitude != 0) {
+                    diff = @intCast(try bit_reader.readBits(magnitude));
+                }
+                std.log.debug("magnitude {}", .{magnitude});
+
+                data.frame.cr.data[block_idx] = diff;
+            }
+        } else {
+            // dct coeff first
         }
+
+        while (try bit_reader.peekBits(2) != 0b10) {
+            // process
+        }
+
+        const bits = try bit_reader.readBits(2);
+        assert(bits == 0b10);
     }
-    _ = bit_reader;
 }
 
+pub const Channel = struct {
+    width: u32 = 0,
+    height: u32 = 0,
+    data: []u8 = undefined,
+};
+
+pub const Frame = struct {
+    width: u32 = 0,
+    height: u32 = 0,
+    y: Channel = .{},
+    cr: Channel = .{},
+    cb: Channel = .{},
+};
+
 pub const mpeg = struct {
+    frame: Frame = .{},
+    allocator: std.mem.Allocator = undefined,
+
     system_clock_reference: u33 = 0,
     mux_rate: u32 = 0,
 
@@ -518,6 +579,9 @@ pub const mpeg = struct {
     // macroblock
     block_pattern: u8,
     mb_intra: u8,
+
+    // stream
+    stream: *std.io.StreamSource,
 };
 
 pub fn decodeVideo(stream: *std.io.StreamSource) !void {
@@ -531,6 +595,10 @@ pub fn decodeVideo(stream: *std.io.StreamSource) !void {
 
     var global_mpeg: mpeg = undefined;
     global_mpeg.audio_bound = 0;
+    global_mpeg.stream = stream;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    global_mpeg.allocator = gpa.allocator();
 
     while (true) {
         if (byte0 == 0x00 and byte1 == 0x00 and byte2 == 0x01) {
@@ -550,6 +618,9 @@ pub fn decodeVideo(stream: *std.io.StreamSource) !void {
                 .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
                 .sequence_end => {
                     std.log.debug("Sequence End", .{});
+                    // global_mpeg.allocator.free(global_mpeg.frame.y.data);
+                    // global_mpeg.allocator.free(global_mpeg.frame.cb.data);
+                    // global_mpeg.allocator.free(global_mpeg.frame.cr.data);
                     return;
                 },
                 .padding_stream => {
