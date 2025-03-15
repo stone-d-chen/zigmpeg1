@@ -532,8 +532,8 @@ pub const mpeg = struct {
 
     // sequence header
 
-    horizontal_size: u12,
-    vertical_size: u12,
+    horizontal_size: u32,
+    vertical_size: u32,
     pel_aspect_ratio: u4,
     picture_rate: u4,
     bit_rate: u18,
