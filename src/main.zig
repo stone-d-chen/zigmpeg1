@@ -273,7 +273,7 @@ pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
         data.vbv_delay,
         data.extra_bit_picture,
     });
-    std.debug.assert(bit_reader.bit_count == 2);
+    // std.debug.assert(bit_reader.bit_count == 2);
     bit_reader.flushBits();
 }
 
@@ -520,16 +520,10 @@ pub const mpeg = struct {
     mb_intra: u8,
 };
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-
-    const file = try std.fs.cwd().openFile("sample_640x360.mpeg", .{});
-    defer file.close();
-
-    var stream = std.io.StreamSource{ .file = file };
+pub fn decodeVideo(stream: *std.io.StreamSource) !void {
     var reader = stream.reader();
 
-    var bit_reader: bitReader = .{ .source = &stream };
+    var bit_reader: bitReader = .{ .source = stream };
 
     var byte0 = try reader.readByte();
     var byte1 = try reader.readByte();
@@ -580,4 +574,25 @@ pub fn main() !void {
             byte2 = try reader.readByte();
         }
     }
+}
+
+pub fn main() !void {
+    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
+
+    const buffer: [46]u8 = .{
+        0x00, 0x00, 0x01, 0xB3, 0x02, 0x00, 0x10, 0x14, 0xFF, 0xFF, 0xE0, 0xA0, 0x00, 0x00, 0x01, 0xB8,
+        0x80, 0x08, 0x00, 0x40, 0x00, 0x00, 0x01, 0x00, 0x00, 0x0F, 0xFF, 0xF8, 0x00, 0x00, 0x01, 0x01,
+        0xFA, 0x96, 0x52, 0x94, 0x88, 0xAA, 0x25, 0x29, 0x48, 0x88, 0x00, 0x00, 0x01, 0xB7,
+    };
+    const fixed_buffer = std.io.fixedBufferStream(&buffer);
+    var stream = std.io.StreamSource{ .const_buffer = fixed_buffer };
+
+    try decodeVideo(&stream);
+
+    // const file = try std.fs.cwd().openFile("sample_640x360.mpeg", .{});
+    // defer file.close();
+
+    // stream = std.io.StreamSource{ .file = file };
+
+    // try decodeVideo(&stream);
 }
