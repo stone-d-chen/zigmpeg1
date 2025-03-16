@@ -386,6 +386,8 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             }
         }
 
+        // @todo change these to appropriate types and then @intCast instead
+        // these were changed to u16 because of the VLC table change
         var mb_horizontal_backward_code: u16 = undefined;
         var mb_horizontal_backward_r: u16 = undefined;
         var mb_vertical_backward_code: u16 = undefined;

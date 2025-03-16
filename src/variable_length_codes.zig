@@ -1,8 +1,10 @@
 const std = @import("std");
 
+const VLCType = u16;
+
 pub const VariableLengthCode = struct {
     code: u24,
-    value: u16,
+    value: VLCType,
     length: u8,
 };
 
@@ -10,8 +12,8 @@ pub const VariableLengthCode = struct {
 // values many (33) and just map to length directly
 pub const CodeLookup = struct {
     bit_length: u6,
-    table: []const u16,
-    lengths: []const u16,
+    table: []const VLCType,
+    lengths: []const u8,
 };
 const ac_vlc: [80]VariableLengthCode = .{
     .{ 0b1, 0x00_01, 1 },
@@ -369,9 +371,9 @@ fn getMaxLength(vlc_table: []const VariableLengthCode) u8 {
 
 // @todo do we just return a CodeLookup and force the functions to take a pointer to a CodeLookup?
 // I guess we can make a multi-item array?
-pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits: usize) struct { bit_length: u8, table: [1 << bits]u16, lengths: [1 << bits]u16 } {
-    var table: [1 << bits]u16 = @splat(255);
-    var lengths: [1 << bits]u16 = @splat(0);
+pub fn generateLookupTables(vlc_table: []const VariableLengthCode, comptime bits: usize) struct { bit_length: u8, table: [1 << bits]VLCType, lengths: [1 << bits]u8 } {
+    var table: [1 << bits]VLCType = @splat(255);
+    var lengths: [1 << bits]u8 = @splat(0);
     var max_bit_length: u8 = 0;
 
     @setEvalBranchQuota(5000);
