@@ -39,6 +39,9 @@ const start_codes = enum(u8) {
         const result = slice_start_1 <= current_code and current_code <= slice_start_175;
         return result;
     }
+    fn toCode(code: u8) start_codes {
+        return @as(start_codes, @enumFromInt(code));
+    }
 };
 
 const picture_types = enum(u8) {
@@ -312,7 +315,7 @@ pub fn readVLCBits(lookup: vlc.CodeLookup, bits: anytype) !u8 {
     return lookup.table[bits];
 }
 
-pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u8 {
+pub fn readVLC(lookup: vlc.CodeLookup, bit_reader: *bitReader) !u16 {
     const bits = try bit_reader.peekBits(@intCast(lookup.bit_length));
     bit_reader.consumeBits(@intCast(lookup.lengths[bits]));
     const result = lookup.table[bits];
@@ -352,7 +355,7 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             .forbidden, .D => unreachable,
         }
 
-        const mb_type: u8 = try readVLC(mb_type_vlc, bit_reader);
+        const mb_type: u16 = try readVLC(mb_type_vlc, bit_reader);
 
         const mb_quant = mb_type & 0b00001;
         const mb_motion_forward = mb_type & 0b00010;
@@ -364,10 +367,10 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             data.quantizer_scale = @intCast(try bit_reader.readBits(5));
         }
 
-        var mb_horizontal_forward_code: u8 = undefined;
-        var mb_horizontal_forward_r: u8 = undefined;
-        var mb_vertical_forward_code: u8 = undefined;
-        var mb_vertical_forward_r: u8 = undefined;
+        var mb_horizontal_forward_code: u16 = undefined;
+        var mb_horizontal_forward_r: u16 = undefined;
+        var mb_vertical_forward_code: u16 = undefined;
+        var mb_vertical_forward_r: u16 = undefined;
 
         if (mb_motion_forward != 0) {
             mb_horizontal_forward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
@@ -383,10 +386,10 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             }
         }
 
-        var mb_horizontal_backward_code: u8 = undefined;
-        var mb_horizontal_backward_r: u8 = undefined;
-        var mb_vertical_backward_code: u8 = undefined;
-        var mb_vertical_backward_r: u8 = undefined;
+        var mb_horizontal_backward_code: u16 = undefined;
+        var mb_horizontal_backward_r: u16 = undefined;
+        var mb_vertical_backward_code: u16 = undefined;
+        var mb_vertical_backward_r: u16 = undefined;
 
         if (mb_motion_backward != 0) {
             mb_horizontal_backward_code = try readVLC(vlc.mb_motion_vector_lookup, bit_reader);
@@ -404,7 +407,7 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
 
         // @todo don't really understand the block pattern stuff
         if (mb_block_pattern != 0) {
-            data.block_pattern = try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader);
+            data.block_pattern = @intCast(try readVLC(vlc.mb_coded_block_pattern_lookup, bit_reader));
         } else if (data.mb_intra != 0) {
             data.block_pattern = 0b1111_11;
         }
@@ -578,7 +581,7 @@ pub const mpeg = struct {
 
     // macroblock
     block_pattern: u8,
-    mb_intra: u8,
+    mb_intra: u16,
 
     // stream
     stream: *std.io.StreamSource,
