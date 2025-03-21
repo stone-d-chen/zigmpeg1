@@ -336,7 +336,7 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
 
     const total_macroblocks = data.vertical_size * data.horizontal_size / (16 * 16);
 
-    for (0..total_macroblocks) |_| {
+    for (0..total_macroblocks) |mb_index| {
         while (try bit_reader.peekBits(11) == 0x1111) {
             bit_reader.consumeBits(11);
         }
@@ -364,7 +364,7 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
         const mb_motion_forward = mb_type & 0b00010;
         const mb_motion_backward = mb_type & 0b00100;
         const mb_block_pattern = mb_type & 0b01000;
-        data.mb_intra = mb_type & 0b10000;
+        data.mb_intra = mb_type >> 4;
 
         if (mb_quant != 0) {
             data.quantizer_scale = @intCast(try bit_reader.readBits(5));
@@ -418,7 +418,7 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
         }
 
         std.log.debug(
-            \\--- Macroblock Header ---
+            \\--- Macroblock Header {} ---
             \\  increment: {}
             \\  mb_type: {b:05}
             \\  picture_type: {}
@@ -426,11 +426,12 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             \\      quantizer_scale: {}
             \\  mb_motion_forward: {b}
             \\  mb_motion_backward: {b}
-            \\  mb_block_intra: {b}
+            \\  mb_block_intra: {}
             \\  mb_coded_block_pattern: {b:06}
             \\      mb_block_pattern: {b}
             \\
         , .{
+            mb_index,
             increment,
             mb_type,
             picture_type,
@@ -443,32 +444,38 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             data.block_pattern,
         });
 
+        if (mb_index == 110) {
+            std.log.debug("break", .{});
+        }
         try processBlocks(data, bit_reader);
     }
     if (bit_reader.bit_count > 8) {
         const bytes_remaining: i32 = @intCast(bit_reader.bit_count / 8);
         try data.stream.seekBy(-1 * bytes_remaining);
     }
-    bit_reader.flushBits();
+    // bit_reader.flushBits();
 }
 
 fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
+    std.log.debug("--- processBlocks ---", .{});
+    std.log.debug("  Intra {}", .{data.mb_intra});
     for (0..6) |block_idx| {
         const block_coded: u8 = data.block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
         if (block_coded == 0) continue;
 
-        std.log.debug("coded {}", .{block_idx});
-
+        std.log.debug("Decoding Block {}", .{block_idx});
         if (data.mb_intra != 0) {
             if (block_idx < 4) {
-                const magnitude = @as(u6, @intCast(try readVLC(vlc.dc_code_y_lookup, bit_reader)));
+                const mag_maybe = try readVLC(vlc.dc_code_y_lookup, bit_reader);
+                assert(mag_maybe != 255);
+                const magnitude = @as(u6, @intCast(mag_maybe));
 
                 var diff: u8 = 0;
                 if (magnitude != 0) {
                     diff = @intCast(try bit_reader.readBits(magnitude));
                 }
 
-                std.log.debug("magnitude {}", .{magnitude});
+                std.log.debug(" Y diff {}", .{diff});
 
                 data.frame.y.data[block_idx] = diff;
             } else { // chroma
@@ -478,16 +485,47 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
                 if (magnitude != 0) {
                     diff = @intCast(try bit_reader.readBits(magnitude));
                 }
-                std.log.debug("magnitude {}", .{magnitude});
+                std.log.debug("Cr/Cb magnitude {}", .{magnitude});
 
                 data.frame.cr.data[block_idx] = diff;
             }
         } else {
+            std.log.debug(" Non Intra", .{});
             // dct coeff first
+            assert(false);
         }
 
-        while (try bit_reader.peekBits(2) != 0b10) {
+        while (true) {
             // process
+            if (try bit_reader.peekBits(2) == 0b10) {
+                break;
+            }
+            for (1..17) |length| {
+                const bits = try bit_reader.peekBits(@intCast(length));
+                if (length == 6 and bits == 0b0000_01) {
+                    std.log.debug(" ESCAPE ", .{});
+
+                    assert(false);
+                }
+
+                const value_maybe = data.map.get(.{ .code = @intCast(bits), .length = @intCast(length) });
+                if (value_maybe) |value| {
+                    _ = try bit_reader.readBits(@intCast(length));
+                    const run = value >> 8;
+                    var mag: i8 = @intCast(value & 0x00FF);
+                    const sign = try bit_reader.readBits(1);
+                    if (sign != 0) {
+                        mag *= -1;
+                    }
+
+                    std.log.debug(" run {}, mag {}", .{ run, mag });
+                    break;
+                }
+
+                if (length == 16) {
+                    unreachable;
+                }
+            }
         }
 
         const bits = try bit_reader.readBits(2);
@@ -546,6 +584,7 @@ pub fn decodeVideo(stream: *std.io.StreamSource) !void {
                 },
                 else => {
                     if (codeenum.isSliceCode()) {
+                        std.log.debug(" Slice {} ", .{codeenum});
                         try processSlice(&global_mpeg, &bit_reader);
                     } else {
                         unreachable;
@@ -575,7 +614,7 @@ pub fn main() !void {
     const fixed_buffer = std.io.fixedBufferStream(&buffer);
     var stream = std.io.StreamSource{ .const_buffer = fixed_buffer };
 
-    try decodeVideo(&stream);
+    // try decodeVideo(&stream);
     std.log.debug("----------------", .{});
     const file = try std.fs.cwd().openFile("samples/sample_640x360.mpeg", .{});
     defer file.close();

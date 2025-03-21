@@ -24,7 +24,7 @@ pub const CodeMap = std.AutoArrayHashMap(CodeKey, VLCType);
 // @todo let ac_vlc use an acceleration table
 pub fn initCodeMap(allocator: std.mem.Allocator) !CodeMap {
     var map = CodeMap.init(allocator);
-    for (0..112) |ind| {
+    for (0..111) |ind| {
         const code = ac_vlc[ind];
 
         try map.put(.{ .code = code.code, .length = code.length }, code.value);
@@ -32,8 +32,8 @@ pub fn initCodeMap(allocator: std.mem.Allocator) !CodeMap {
     return map;
 }
 
-pub const ac_vlc: [112]VariableLengthCode = .{
-    .{ .code = 0b1, .value = 0x00_01, .length = 1 },
+pub const ac_vlc: [111]VariableLengthCode = .{
+    //   .{ .code = 0b1, .value = 0x00_01, .length = 1 },
     .{ .code = 0b11, .value = 0x00_01, .length = 2 },
     .{ .code = 0b0100, .value = 0x00_02, .length = 4 },
     .{ .code = 0b0010_1, .value = 0x00_03, .length = 5 },
