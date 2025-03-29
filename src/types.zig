@@ -15,6 +15,17 @@ pub const Frame = struct {
     cb: Channel = .{},
 };
 
+pub const Packet = struct {
+    // packet
+    packet_stream_id: u8,
+    packet_length: u16,
+    std_buffer_scale: u1,
+    std_buffer_size: u13,
+    presentation_time_stamp: u33,
+    decoding_time_stamp: u33,
+    data: []u8,
+};
+
 pub const mpeg = struct {
     frame: Frame = .{},
     allocator: std.mem.Allocator = undefined,
@@ -43,6 +54,11 @@ pub const mpeg = struct {
     std_buffer_size: u13,
     presentation_time_stamp: u33,
     decoding_time_stamp: u33,
+
+    video_packets: [1024]Packet,
+    current_packet: u16,
+    video_buffer: [2048 * 277]u8,
+    current_byte: u32,
 
     // sequence header
 

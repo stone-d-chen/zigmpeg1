@@ -4,11 +4,32 @@ const vlc = @import("variable_length_codes.zig");
 const Channel = @import("types.zig").Channel;
 const Frame = @import("types.zig").Frame;
 const mpeg = @import("types.zig").mpeg;
-
+const Packet = @import("types.zig").Packet;
 const assert = std.debug.assert;
 
-const start_codes = enum(u8) {
+pub fn findNextStartCodeByte(bit_reader: *bitReader) !u8 {
+    assert(bit_reader.bit_count == 0);
+    var reader = bit_reader.source.reader();
+    var byte0 = try reader.readByte();
+    var byte1 = try reader.readByte();
+    var byte2 = try reader.readByte();
+
+    while (true) {
+        if (byte0 == 0x00 and byte1 == 0x00 and byte2 == 0x01) {
+            const start_code = try reader.readByte();
+            return start_code;
+        } else {
+            byte0 = byte1;
+            byte1 = byte2;
+            byte2 = try reader.readByte();
+        }
+    }
+}
+
+const VideoStartCodes = enum(u8) {
+    const Self = @This();
     // video
+
     picture_start = 0x00,
     slice_start_1 = 0x01,
     slice_start_175 = 0xAF,
@@ -20,6 +41,25 @@ const start_codes = enum(u8) {
     sequence_end = 0xB7,
     group_start = 0xB8,
 
+    pub fn isSliceCode(self: Self) bool {
+        const slice_start_1: u8 = @intFromEnum(Self.slice_start_1);
+        const slice_start_175: u8 = @intFromEnum(Self.slice_start_175);
+        const current_code: u8 = @intFromEnum(self);
+        const result = slice_start_1 <= current_code and current_code <= slice_start_175;
+        return result;
+    }
+
+    pub fn findNextStartCode(bit_reader: *bitReader) !Self {
+        const start_byte = try findNextStartCodeByte(bit_reader);
+        return Self.toCode(start_byte);
+    }
+
+    fn toCode(code: u8) Self {
+        return @as(Self, @enumFromInt(code));
+    }
+};
+const SystemStartCodes = enum(u8) {
+    const Self = @This();
     // system
     ios_11172_end = 0xB9,
     pack_start = 0xBA,
@@ -35,15 +75,12 @@ const start_codes = enum(u8) {
     video_stream_0 = 0xE0,
     video_stream_15 = 0xEF,
 
-    pub fn isSliceCode(self: @This()) bool {
-        const slice_start_1: u8 = @intFromEnum(start_codes.slice_start_1);
-        const slice_start_175: u8 = @intFromEnum(start_codes.slice_start_175);
-        const current_code: u8 = @intFromEnum(self);
-        const result = slice_start_1 <= current_code and current_code <= slice_start_175;
-        return result;
+    pub fn findNextStartCode(bit_reader: *bitReader) !Self {
+        const start_byte = try findNextStartCodeByte(bit_reader);
+        return Self.toCode(start_byte);
     }
-    fn toCode(code: u8) start_codes {
-        return @as(start_codes, @enumFromInt(code));
+    fn toCode(code: u8) Self {
+        return @as(Self, @enumFromInt(code));
     }
 };
 
@@ -62,8 +99,8 @@ const stream_ids = enum(u8) {
     // incomplete
 };
 
-fn toCode(code: u8) start_codes {
-    return @as(start_codes, @enumFromInt(code));
+fn toCode(code: u8) SystemStartCodes {
+    return @as(SystemStartCodes, @enumFromInt(code));
 }
 
 fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
@@ -132,13 +169,19 @@ fn processSystemHeader(data: *mpeg, bit_reader: *bitReader) !void {
     std.debug.assert(bit_reader.bit_count == 0);
 }
 
-pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
+pub fn processPacket(context: *mpeg, bit_reader: *bitReader) !void {
+    var data: *Packet = &context.video_packets[context.current_packet];
+    context.current_packet += 1;
+
     data.packet_length = @intCast(try bit_reader.readBits(16));
+
+    var total_bits: u8 = 0;
 
     std.log.debug("stream {b} packet_length {}", .{ data.packet_stream_id, data.packet_length });
 
     while (try bit_reader.peekBits(8) == 0xFF) {
         bit_reader.consumeBits(8);
+        total_bits += 8;
     }
 
     const signal_bits = try bit_reader.peekBits(4);
@@ -147,9 +190,12 @@ pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
         bit_reader.consumeBits(2);
         data.std_buffer_scale = @intCast(try bit_reader.readBits(1));
         data.std_buffer_size = @intCast(try bit_reader.readBits(13));
+        total_bits += 1 + 13;
     } else if (signal_bits == 0b0010) {
         bit_reader.consumeBits(4);
         data.presentation_time_stamp = try bit_reader.readBits31515();
+        total_bits += 4 + 33;
+        std.log.debug("pts/dts {}\n", .{data.presentation_time_stamp});
     } else if (signal_bits == 0b0011) {
         bit_reader.consumeBits(4);
 
@@ -158,13 +204,37 @@ pub fn processPacket(data: *mpeg, bit_reader: *bitReader) !void {
         _ = try bit_reader.readBits(4);
         data.decoding_time_stamp = try bit_reader.readBits31515();
 
-        std.log.debug("pts/dts {} {}", .{ data.presentation_time_stamp, data.decoding_time_stamp });
+        total_bits += 4 + 33 + 4 + 33;
+        std.log.debug("pts/dts {} {}\n", .{ data.presentation_time_stamp, data.decoding_time_stamp });
     } else {
         const expected_bits = try bit_reader.readBits(8);
         assert(expected_bits == 0b0000_1111);
+        total_bits += 8;
+        std.log.debug("no pts", .{});
     }
 
     assert(bit_reader.bit_count == 0);
+
+    const bytes_to_read = data.packet_length - total_bits / 8 - 1;
+
+    std.log.debug(
+        \\--- Process Packet ---
+        \\ packet number {}
+        \\
+    , .{
+        context.current_packet - 1,
+    });
+
+    data.data = try context.allocator.alloc(u8, bytes_to_read);
+
+    for (0..bytes_to_read) |index| {
+        data.data[index] = try bit_reader.source.reader().readByte();
+        context.video_buffer[context.current_byte] = data.data[index];
+        context.current_byte += 1;
+    }
+
+    //const bytes_read = try bit_reader.source.reader().readAtLeast(data.data, bytes_to_read);
+    // assert(bytes_read == bytes_to_read);
 }
 
 pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
@@ -533,16 +603,12 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
     }
 }
 
-pub fn decodeVideo(stream: *std.io.StreamSource) !void {
-    var reader = stream.reader();
-
-    var byte0 = try reader.readByte();
-    var byte1 = try reader.readByte();
-    var byte2 = try reader.readByte();
-
+pub fn sendPacketToDecoder(stream: *std.io.StreamSource) !void {
     var global_mpeg: mpeg = undefined;
     global_mpeg.audio_bound = 0;
     global_mpeg.stream = stream;
+    global_mpeg.current_packet = 0;
+    global_mpeg.current_byte = 0;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     global_mpeg.allocator = gpa.allocator();
@@ -555,50 +621,54 @@ pub fn decodeVideo(stream: *std.io.StreamSource) !void {
     assert(out == 0x00_17);
 
     var bit_reader: bitReader = .{ .source = stream };
+
     while (true) {
-        if (byte0 == 0x00 and byte1 == 0x00 and byte2 == 0x01) {
-            const code = try reader.readByte();
-            const codeenum = toCode(code);
-            if (false) std.log.debug("Found a start code {x}", .{code});
+        const system_start_code = try SystemStartCodes.findNextStartCode(&bit_reader);
+        switch (system_start_code) {
+            .pack_start => try processPack(&global_mpeg, &bit_reader),
+            .system_header_start => try processSystemHeader(&global_mpeg, &bit_reader),
+            .video_stream_0 => {
+                global_mpeg.packet_stream_id = @intFromEnum(system_start_code);
+                try processPacket(&global_mpeg, &bit_reader);
+            },
+            .padding_stream => {
+                std.log.debug("padding stream, breaking loop", .{});
+                break;
+            },
+            else => unreachable,
+        }
+    }
 
-            switch (codeenum) {
-                .pack_start => try processPack(&global_mpeg, &bit_reader),
-                .system_header_start => try processSystemHeader(&global_mpeg, &bit_reader),
-                .picture_start => try processPicture(&global_mpeg, &bit_reader),
-                .video_stream_0 => {
-                    global_mpeg.packet_stream_id = code;
-                    try processPacket(&global_mpeg, &bit_reader);
-                },
-                .sequence_header => try processSequenceHeader(&global_mpeg, &bit_reader),
-                .group_start => try processGroupOfPictures(&global_mpeg, &bit_reader),
-                .sequence_end => {
-                    std.log.debug("Sequence End", .{});
-                    // global_mpeg.allocator.free(global_mpeg.frame.y.data);
-                    // global_mpeg.allocator.free(global_mpeg.frame.cb.data);
-                    // global_mpeg.allocator.free(global_mpeg.frame.cr.data);
-                    return;
-                },
-                .padding_stream => {
-                    std.log.debug("padding stream, breaking loop", .{});
-                    break;
-                },
-                else => {
-                    if (codeenum.isSliceCode()) {
-                        std.log.debug(" Slice {} ", .{codeenum});
-                        try processSlice(&global_mpeg, &bit_reader);
-                    } else {
-                        unreachable;
-                    }
-                },
-            }
+    std.log.debug("Bytes written {}", .{global_mpeg.current_byte});
+    const v_buffer = std.io.fixedBufferStream(&global_mpeg.video_buffer);
+    var video_source = std.io.StreamSource{ .buffer = v_buffer };
+    var video_buffer_reader = bitReader{ .source = &video_source };
+    while (true) {
+        const vid_start_code = VideoStartCodes.findNextStartCode(&video_buffer_reader) catch |err| {
+            std.log.debug("error is {}", .{err});
+            break;
+        };
+        std.log.debug("start code is {}", .{vid_start_code});
 
-            byte0 = try reader.readByte();
-            byte1 = try reader.readByte();
-            byte2 = try reader.readByte();
-        } else {
-            byte0 = byte1;
-            byte1 = byte2;
-            byte2 = try reader.readByte();
+        switch (vid_start_code) {
+            .picture_start => try processPicture(&global_mpeg, &video_buffer_reader),
+            .sequence_header => try processSequenceHeader(&global_mpeg, &video_buffer_reader),
+            .group_start => try processGroupOfPictures(&global_mpeg, &video_buffer_reader),
+            .sequence_end => {
+                std.log.debug("Sequence End", .{});
+                // global_mpeg.allocator.free(global_mpeg.frame.y.data);
+                // global_mpeg.allocator.free(global_mpeg.frame.cb.data);
+                // global_mpeg.allocator.free(global_mpeg.frame.cr.data);
+                return;
+            },
+            else => {
+                if (vid_start_code.isSliceCode()) {
+                    std.log.debug(" Slice {} ", .{vid_start_code});
+                    try processSlice(&global_mpeg, &video_buffer_reader);
+                } else {
+                    unreachable;
+                }
+            },
         }
     }
 }
@@ -621,5 +691,5 @@ pub fn main() !void {
 
     stream = std.io.StreamSource{ .file = file };
 
-    try decodeVideo(&stream);
+    try sendPacketToDecoder(&stream);
 }
