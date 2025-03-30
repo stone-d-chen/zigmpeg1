@@ -7,7 +7,9 @@ const mpeg = @import("types.zig").mpeg;
 const Packet = @import("types.zig").Packet;
 const assert = std.debug.assert;
 
-pub fn findNextStartCodeByte(bit_reader: *bitReader) !u8 {
+// @todo how do functions look up vs methods
+pub fn findNextStartCode(bit_reader: *bitReader, T: type) !T {
+    // @todo assert of type somehow or just implement an interface of sorts
     assert(bit_reader.bit_count == 0);
     var reader = bit_reader.source.reader();
     var byte0 = try reader.readByte();
@@ -17,7 +19,7 @@ pub fn findNextStartCodeByte(bit_reader: *bitReader) !u8 {
     while (true) {
         if (byte0 == 0x00 and byte1 == 0x00 and byte2 == 0x01) {
             const start_code = try reader.readByte();
-            return start_code;
+            return @as(T, @enumFromInt(start_code));
         } else {
             byte0 = byte1;
             byte1 = byte2;
@@ -28,7 +30,6 @@ pub fn findNextStartCodeByte(bit_reader: *bitReader) !u8 {
 
 const VideoStartCodes = enum(u8) {
     const Self = @This();
-    // video
 
     picture_start = 0x00,
     slice_start_1 = 0x01,
@@ -48,18 +49,10 @@ const VideoStartCodes = enum(u8) {
         const result = slice_start_1 <= current_code and current_code <= slice_start_175;
         return result;
     }
-
-    pub fn findNextStartCode(bit_reader: *bitReader) !Self {
-        const start_byte = try findNextStartCodeByte(bit_reader);
-        return Self.toCode(start_byte);
-    }
-
-    fn toCode(code: u8) Self {
-        return @as(Self, @enumFromInt(code));
-    }
 };
 const SystemStartCodes = enum(u8) {
     const Self = @This();
+
     // system
     ios_11172_end = 0xB9,
     pack_start = 0xBA,
@@ -74,14 +67,6 @@ const SystemStartCodes = enum(u8) {
 
     video_stream_0 = 0xE0,
     video_stream_15 = 0xEF,
-
-    pub fn findNextStartCode(bit_reader: *bitReader) !Self {
-        const start_byte = try findNextStartCodeByte(bit_reader);
-        return Self.toCode(start_byte);
-    }
-    fn toCode(code: u8) Self {
-        return @as(Self, @enumFromInt(code));
-    }
 };
 
 const picture_types = enum(u8) {
@@ -98,10 +83,6 @@ const stream_ids = enum(u8) {
     padding = 0b1011_1110,
     // incomplete
 };
-
-fn toCode(code: u8) SystemStartCodes {
-    return @as(SystemStartCodes, @enumFromInt(code));
-}
 
 fn processPack(data: *mpeg, bit_reader: *bitReader) !void {
     const debug = true;
@@ -623,7 +604,7 @@ pub fn sendPacketToDecoder(stream: *std.io.StreamSource) !void {
     var bit_reader: bitReader = .{ .source = stream };
 
     while (true) {
-        const system_start_code = try SystemStartCodes.findNextStartCode(&bit_reader);
+        const system_start_code = try findNextStartCode(&bit_reader, SystemStartCodes);
         switch (system_start_code) {
             .pack_start => try processPack(&global_mpeg, &bit_reader),
             .system_header_start => try processSystemHeader(&global_mpeg, &bit_reader),
@@ -643,8 +624,9 @@ pub fn sendPacketToDecoder(stream: *std.io.StreamSource) !void {
     const v_buffer = std.io.fixedBufferStream(&global_mpeg.video_buffer);
     var video_source = std.io.StreamSource{ .buffer = v_buffer };
     var video_buffer_reader = bitReader{ .source = &video_source };
+
     while (true) {
-        const vid_start_code = VideoStartCodes.findNextStartCode(&video_buffer_reader) catch |err| {
+        const vid_start_code = findNextStartCode(&video_buffer_reader, VideoStartCodes) catch |err| {
             std.log.debug("error is {}", .{err});
             break;
         };
