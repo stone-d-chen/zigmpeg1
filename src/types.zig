@@ -4,7 +4,7 @@ const vlc = @import("variable_length_codes.zig");
 pub const Channel = struct {
     width: u32 = 0,
     height: u32 = 0,
-    data: []u8 = undefined,
+    data: []i32 = undefined,
 };
 
 pub const Frame = struct {
@@ -59,6 +59,9 @@ pub const mpeg = struct {
     current_packet: u16,
     video_buffer: [2048 * 277]u8,
     current_byte: u32,
+
+    current_macroblock: u32,
+    dc_prev: [3]i32,
 
     // sequence header
 
