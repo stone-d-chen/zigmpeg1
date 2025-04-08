@@ -266,6 +266,7 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
     data.constrained_parameters_flag = @intCast(try bit_reader.readBits(1));
     data.load_intra_quantizer_matrix = @intCast(try bit_reader.readBits(1));
 
+    // @todo don't copy the matrix, just have a pointer to it?
     if (data.load_intra_quantizer_matrix == 1) {
         for (0..64) |i| {
             data.intra_quantizer_matrix[i] = @intCast(try bit_reader.readBits(8));
@@ -280,7 +281,12 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
 
     if (data.load_non_intra_quantizer_matrix == 1) {
         for (0..64) |i| {
-            data.intra_quantizer_matrix[i] = @intCast(try bit_reader.readBits(8));
+            data.non_intra_quantizer_matrix[i] = @intCast(try bit_reader.readBits(8));
+        }
+    } else {
+        for (0..64) |i| {
+            // @todo, non_intra matrix instead of intra_quant
+            data.non_intra_quantizer_matrix[i] = intra_quant[i];
         }
     }
 
@@ -563,119 +569,126 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
     // 1, 0,4
     // 2, 0,8
     for (0..6) |block_idx| {
-        const block_coded: u8 = data.block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
-        if (block_coded == 0) continue;
-
         var block_data: [64]i32 = @splat(0);
 
+        const block_coded: u8 = data.block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
+        if (block_coded != 0) {
+            std.log.debug("Decoding Block {}", .{block_idx});
+            if (data.mb_intra != 0) {
+                if (block_idx < 4) {
+                    const mag_maybe = try readVLC(vlc.dc_code_y_lookup, bit_reader);
+                    assert(mag_maybe != 255);
+                    const magnitude = @as(u5, @intCast(mag_maybe));
+
+                    const dc_prev = &data.dc_prev[0];
+                    var diff: u8 = 0;
+                    if (magnitude != 0) {
+                        diff = @intCast(try bit_reader.readBits(magnitude));
+                        if (@as(usize, 1) << (magnitude - 1) != 0) {
+                            block_data[0] = dc_prev.* + diff;
+                        } else {
+                            block_data[0] = dc_prev.* + (-1 * (@as(i32, 1) << magnitude)) | (diff + 1);
+                        }
+                    } else {
+                        block_data[0] = dc_prev.*;
+                    }
+
+                    std.log.debug(" Y diff {}", .{diff});
+
+                    dc_prev.* = block_data[0];
+                } else { // chroma
+                    const magnitude = @as(u6, @intCast(try readVLC(vlc.dc_code_c_lookup, bit_reader)));
+
+                    var diff: u8 = 0;
+                    if (magnitude != 0) {
+                        diff = @intCast(try bit_reader.readBits(magnitude));
+                    }
+                    std.log.debug("Cr/Cb magnitude {}", .{magnitude});
+
+                    data.frame.cr.data[block_idx] = diff;
+                }
+            } else {
+                std.log.debug(" Non Intra", .{});
+                // dct coeff first
+                assert(false);
+            }
+
+            var n: usize = 1;
+            while (true) {
+                if (try bit_reader.peekBits(2) == 0b10) {
+                    break;
+                }
+                var run: usize = 0;
+                var mag: i16 = 0;
+                for (1..17) |length| {
+                    const bits = try bit_reader.peekBits(@intCast(length));
+                    if (length == 6 and bits == 0b0000_01) {
+                        _ = try bit_reader.readBits(6);
+                        run = try bit_reader.readBits(6);
+                        mag = @intCast(try bit_reader.readBits(8));
+                        //std.log.debug("escape run {}, mag {}", .{ run, mag });
+                        if (mag == 0) {
+                            mag = @intCast(try bit_reader.readBits(8));
+                        } else if (mag == 128) {
+                            mag = @intCast(try bit_reader.readBits(8));
+                            mag -= 256;
+                        } else if (mag > 128) {
+                            mag = mag - 256;
+                        }
+                        //std.log.debug("escape run {}, mag {}", .{ run, mag });
+                        break;
+                    }
+
+                    const value_maybe = data.map.get(.{ .code = @intCast(bits), .length = @intCast(length) });
+                    if (value_maybe) |value| {
+                        _ = try bit_reader.readBits(@intCast(length));
+                        run = value >> 8;
+                        mag = @intCast(value & 0x00FF);
+                        const sign = try bit_reader.readBits(1);
+                        if (sign != 0) {
+                            mag *= -1;
+                        }
+                        break;
+                    }
+
+                    if (length == 16) {
+                        unreachable;
+                    }
+                }
+
+                std.log.debug(" run {}, mag {}", .{ run, mag });
+                n += run;
+
+                const i = zig_zag[n];
+                std.log.debug("quant {}", .{mag});
+                block_data[i] = (2 * mag * data.quantizer_scale * data.intra_quantizer_matrix[i]) >> 4;
+                if (block_data[i] & 1 == 0) {
+                    block_data[i] -= if (block_data[i] > 0) 1 else -1;
+                }
+                // @todo, replace with clamp
+                if (block_data[i] > 2047) {
+                    block_data[i] = 2047;
+                }
+                if (block_data[i] < -2048) {
+                    block_data[i] = -2048;
+                }
+                std.log.debug("quant {}", .{block_data[i]});
+                n += 1;
+            }
+        }
         const mb_row = 0;
         const mb_col = 0;
-        const pixel_y = mb_row * (data.frame.y.width * 16) + mb_col * 16;
+        const base_pixel = mb_row * (data.frame.y.width * 16) + mb_col * 16;
 
-        var mb_pointer_y: *i32 = undefined;
-        if (block_idx < 4) {
-            mb_pointer_y = &data.frame.y.data[pixel_y];
-        } else if (block_idx == 4) {
-            mb_pointer_y = &data.frame.cr.data[pixel_y];
-        } else {
-            mb_pointer_y = &data.frame.cb.data[pixel_y];
+        for (0..8) |y| {
+            const line_y = base_pixel + y * data.frame.y.width;
+            for (0..8) |x| {
+                data.frame.y.data[line_y + x] = block_data[y * 8 + x];
+                std.debug.print("{} ", .{block_data[y * 8 + x]});
+            }
+            std.debug.print("\n", .{});
         }
-
-        std.log.debug("Decoding Block {}", .{block_idx});
-        if (data.mb_intra != 0) {
-            if (block_idx < 4) {
-                const mag_maybe = try readVLC(vlc.dc_code_y_lookup, bit_reader);
-                assert(mag_maybe != 255);
-                const magnitude = @as(u5, @intCast(mag_maybe));
-
-                const dc_prev = &data.dc_prev[0];
-                var diff: u8 = 0;
-                if (magnitude != 0) {
-                    diff = @intCast(try bit_reader.readBits(magnitude));
-                    if (@as(usize, 1) << (magnitude - 1) != 0) {
-                        block_data[0] = dc_prev.* + diff;
-                    } else {
-                        block_data[0] = dc_prev.* + (-1 * (@as(i32, 1) << magnitude)) | (diff + 1);
-                    }
-                } else {
-                    block_data[0] = dc_prev.*;
-                }
-
-                std.log.debug(" Y diff {}", .{diff});
-
-                dc_prev.* = block_data[0];
-            } else { // chroma
-                const magnitude = @as(u6, @intCast(try readVLC(vlc.dc_code_c_lookup, bit_reader)));
-
-                var diff: u8 = 0;
-                if (magnitude != 0) {
-                    diff = @intCast(try bit_reader.readBits(magnitude));
-                }
-                std.log.debug("Cr/Cb magnitude {}", .{magnitude});
-
-                data.frame.cr.data[block_idx] = diff;
-            }
-        } else {
-            std.log.debug(" Non Intra", .{});
-            // dct coeff first
-            assert(false);
-        }
-
-        var n: usize = 1;
-        while (true) {
-            if (try bit_reader.peekBits(2) == 0b10) {
-                break;
-            }
-            var run: usize = 0;
-            var mag: i16 = 0;
-            for (1..17) |length| {
-                const bits = try bit_reader.peekBits(@intCast(length));
-                if (length == 6 and bits == 0b0000_01) {
-                    _ = try bit_reader.readBits(6);
-                    run = try bit_reader.readBits(6);
-                    mag = @intCast(try bit_reader.readBits(8));
-                    //std.log.debug("escape run {}, mag {}", .{ run, mag });
-                    if (mag == 0) {
-                        mag = @intCast(try bit_reader.readBits(8));
-                    } else if (mag == 128) {
-                        mag = @intCast(try bit_reader.readBits(8));
-                        mag -= 256;
-                    } else if (mag > 128) {
-                        mag = mag - 256;
-                    }
-                    //std.log.debug("escape run {}, mag {}", .{ run, mag });
-                    break;
-                }
-
-                const value_maybe = data.map.get(.{ .code = @intCast(bits), .length = @intCast(length) });
-                if (value_maybe) |value| {
-                    _ = try bit_reader.readBits(@intCast(length));
-                    run = value >> 8;
-                    mag = @intCast(value & 0x00FF);
-                    const sign = try bit_reader.readBits(1);
-                    if (sign != 0) {
-                        mag *= -1;
-                    }
-                    break;
-                }
-
-                if (length == 16) {
-                    unreachable;
-                }
-            }
-
-            std.log.debug(" run {}, mag {}", .{ run, mag });
-            n += run;
-
-            const i = zig_zag[n];
-            std.log.debug("quant {}", .{mag});
-            block_data[i] = (2 * mag * data.quantizer_scale * data.intra_quantizer_matrix[i]) >> 4;
-            if (block_data[i] & 1 == 0) {
-                block_data[i] -= if (block_data[i] > 0) 1 else -1;
-            }
-            std.log.debug("quant {}", .{block_data[i]});
-            n += 1;
-        }
+        assert(false);
 
         const bits = try bit_reader.readBits(2);
         assert(bits == 0b10);
