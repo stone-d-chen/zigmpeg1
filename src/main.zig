@@ -251,9 +251,14 @@ pub fn processSequenceHeader(data: *mpeg, bit_reader: *bitReader) !void {
 
     data.frame.y.width = channel_width;
     data.frame.y.height = channel_height;
-    data.frame.y.data = try data.allocator.alloc(i32, channel_width * channel_height);
-    data.frame.cr.data = try data.allocator.alloc(i32, channel_width * channel_height);
-    data.frame.cb.data = try data.allocator.alloc(i32, channel_width * channel_height);
+    data.frame.cr.width = channel_width;
+    data.frame.cr.height = channel_height;
+    data.frame.cb.width = channel_width;
+    data.frame.cb.height = channel_height;
+
+    data.frame.y.data = try data.allocator.alloc(i32, channel_width * channel_height * 16 * 16);
+    data.frame.cr.data = try data.allocator.alloc(i32, channel_width * channel_height * 16 * 16);
+    data.frame.cb.data = try data.allocator.alloc(i32, channel_width * channel_height * 16 * 16);
 
     data.pel_aspect_ratio = @intCast(try bit_reader.readBits(4));
     data.picture_rate = @intCast(try bit_reader.readBits(4));
@@ -378,9 +383,12 @@ pub fn processPicture(data: *mpeg, bit_reader: *bitReader) !void {
     bit_reader.flushBits();
 }
 
-pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
-    data.dc_prev = @splat(128);
+pub fn processSlice(data: *mpeg, bit_reader: *bitReader, slice_ind: u32) !void {
+    data.dc_prev = @splat(128 * 8);
     data.quantizer_scale = @intCast(try bit_reader.readBits(5));
+    // reset address at start of slice
+    data.macroblock_address = @intCast((slice_ind - 1) * data.frame.y.width);
+    data.macroblock_address -= 1;
 
     // @todo: init to 0 somewhere else
     data.extra_information_slice = 0;
@@ -394,10 +402,12 @@ pub fn processSlice(data: *mpeg, bit_reader: *bitReader) !void {
         \\--- Slice Header ---
         \\  quantizer_scale: {}
         \\  extra_information_slice: {}
+        \\  macroblock_address: {}
         \\
     , .{
         data.quantizer_scale,
         data.extra_information_slice,
+        data.macroblock_address,
     });
 
     data.current_packet += 1;
@@ -431,9 +441,8 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
 
     // const total_macroblocks = data.vertical_size * data.horizontal_size / (16 * 16);
 
-    const mb_count_x = data.frame.y.width / 16;
-    const mb_count_y = data.frame.y.height / 16;
-    // const mb_count = mb_count_x * mb_count_y;
+    const mb_count_x = data.frame.y.width;
+    const mb_count_y = data.frame.y.height;
 
     var mb_index: u32 = 0;
     for (0..mb_count_y) |mb_y| {
@@ -444,14 +453,25 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
             while (try bit_reader.peekBits(11) == 0x1111) {
                 bit_reader.consumeBits(11);
             }
+            if (data.macroblock_address == 322) {
+                std.debug.print("\n", .{});
+            }
 
-            var increment: u32 = 0;
+            var increment: i32 = 0;
 
             while (try bit_reader.peekBits(11) == 0x1000) {
                 bit_reader.consumeBits(11);
                 increment += 33;
+                assert(false);
             }
+
             increment += @intCast(try readVLC(vlc.mb_address_increment_lookup, bit_reader));
+            assert(increment == 1);
+
+            data.macroblock_address += increment;
+            std.debug.print("increment: {}\n\n", .{increment});
+            data.macroblock_row = @as(u32, @intCast(data.macroblock_address)) / data.frame.y.width; // macroblock width
+            data.macroblock_col = @as(u32, @intCast(data.macroblock_address)) % data.frame.y.width;
 
             const picture_type: picture_types = @enumFromInt(data.picture_coding_type);
             var mb_type_vlc: vlc.CodeLookup = undefined;
@@ -533,6 +553,7 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
                 \\  mb_block_intra: {}
                 \\  mb_coded_block_pattern: {b:06}
                 \\      mb_block_pattern: {b}
+                \\ mb_row, col, {} x {}
                 \\
             , .{
                 mb_index,
@@ -546,11 +567,10 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
                 data.mb_intra,
                 mb_block_pattern,
                 data.block_pattern,
+                data.macroblock_row,
+                data.macroblock_col,
             });
 
-            if (mb_index == 326) {
-                std.log.debug("break", .{});
-            }
             try processBlocks(data, bit_reader);
         }
     }
@@ -564,16 +584,24 @@ pub fn processMacroblocks(data: *mpeg, bit_reader: *bitReader) !void {
 fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
     std.log.debug("--- processBlocks ---", .{});
     std.log.debug("  Intra {}", .{data.mb_intra});
+    const debug = true;
 
     // 0, 0,0
     // 1, 0,4
     // 2, 0,8
+
     for (0..6) |block_idx| {
         var block_data: [64]i32 = @splat(0);
 
+        if (data.macroblock_address == 322 and block_idx == 0) {
+            std.debug.print("address \n", .{});
+        }
+
         const block_coded: u8 = data.block_pattern & (@as(u8, 1) << @as(u3, @intCast(block_idx)));
-        if (block_coded != 0) {
-            std.log.debug("Decoding Block {}", .{block_idx});
+        if (block_coded == 0) {
+            assert(false);
+        } else if (block_coded != 0) {
+            if (debug) std.log.debug("Decoding Block {}", .{block_idx});
             if (data.mb_intra != 0) {
                 if (block_idx < 4) {
                     const mag_maybe = try readVLC(vlc.dc_code_y_lookup, bit_reader);
@@ -581,9 +609,10 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
                     const magnitude = @as(u5, @intCast(mag_maybe));
 
                     const dc_prev = &data.dc_prev[0];
-                    var diff: u8 = 0;
+                    var diff: i32 = 0;
                     if (magnitude != 0) {
                         diff = @intCast(try bit_reader.readBits(magnitude));
+                        diff *= 8;
                         if (@as(usize, 1) << (magnitude - 1) != 0) {
                             block_data[0] = dc_prev.* + diff;
                         } else {
@@ -603,12 +632,12 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
                     if (magnitude != 0) {
                         diff = @intCast(try bit_reader.readBits(magnitude));
                     }
-                    std.log.debug("Cr/Cb magnitude {}", .{magnitude});
+                    if (debug) std.log.debug("Cr/Cb magnitude {}", .{magnitude});
 
                     data.frame.cr.data[block_idx] = diff;
                 }
             } else {
-                std.log.debug(" Non Intra", .{});
+                if (debug) std.log.debug(" Non Intra", .{});
                 // dct coeff first
                 assert(false);
             }
@@ -616,6 +645,7 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
             var n: usize = 1;
             while (true) {
                 if (try bit_reader.peekBits(2) == 0b10) {
+                    bit_reader.consumeBits(2);
                     break;
                 }
                 var run: usize = 0;
@@ -635,7 +665,7 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
                         } else if (mag > 128) {
                             mag = mag - 256;
                         }
-                        //std.log.debug("escape run {}, mag {}", .{ run, mag });
+                        std.log.debug("escape run {}, mag {}", .{ run, mag });
                         break;
                     }
 
@@ -656,11 +686,11 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
                     }
                 }
 
-                std.log.debug(" run {}, mag {}", .{ run, mag });
+                if (debug) std.log.debug(" run {}, mag {}", .{ run, mag });
                 n += run;
 
                 const i = zig_zag[n];
-                std.log.debug("quant {}", .{mag});
+                // if (debug) std.log.debug("quant {}", .{mag});
                 block_data[i] = (2 * mag * data.quantizer_scale * data.intra_quantizer_matrix[i]) >> 4;
                 if (block_data[i] & 1 == 0) {
                     block_data[i] -= if (block_data[i] > 0) 1 else -1;
@@ -672,26 +702,47 @@ fn processBlocks(data: *mpeg, bit_reader: *bitReader) !void {
                 if (block_data[i] < -2048) {
                     block_data[i] = -2048;
                 }
-                std.log.debug("quant {}", .{block_data[i]});
+                // if (debug) std.log.debug("quant {}", .{block_data[i]});
                 n += 1;
             }
         }
-        const mb_row = 0;
-        const mb_col = 0;
-        const base_pixel = mb_row * (data.frame.y.width * 16) + mb_col * 16;
 
-        for (0..8) |y| {
-            const line_y = base_pixel + y * data.frame.y.width;
-            for (0..8) |x| {
-                data.frame.y.data[line_y + x] = block_data[y * 8 + x];
-                std.debug.print("{} ", .{block_data[y * 8 + x]});
-            }
-            std.debug.print("\n", .{});
+        idctBlock(block_data[0..64]);
+
+        copyToBlock(data, block_idx, block_data[0..64]);
+        //const bits = try bit_reader.readBits(2);
+        //assert(bits == 0b10);
+    }
+}
+
+pub fn copyToBlock(data: *mpeg, block_idx: usize, block_data: []i32) void {
+    assert(block_idx < 6);
+    const mb_row = data.macroblock_row;
+    const mb_col = data.macroblock_col;
+    var pixel_row = mb_row * 16 + @divFloor(block_idx, 2) * 8;
+    const pixel_col = mb_col * 16 + (block_idx % 2) * 8;
+
+    std.log.debug("mb row {}, mb col {}", .{ mb_row, mb_col });
+    std.log.debug("block_idx {}", .{block_idx});
+    var channel: Channel = undefined;
+    if (block_idx < 4) {
+        channel = data.frame.y;
+    } else if (block_idx == 4) {
+        return;
+        //channel = data.frame.cr;
+    } else if (block_idx == 5) {
+        return;
+        // channel = data.frame.cb;
+    }
+
+    for (0..8) |y| {
+        const line_y = pixel_row * data.horizontal_size + pixel_col;
+        for (0..8) |x| {
+            channel.data[line_y + x] = block_data[y * 8 + x];
+            // std.debug.print("{} ", .{channel.data[line_y + x]});
         }
-        assert(false);
-
-        const bits = try bit_reader.readBits(2);
-        assert(bits == 0b10);
+        // std.debug.print("\n", .{});
+        pixel_row += 1;
     }
 }
 
@@ -756,7 +807,7 @@ pub fn sendPacketToDecoder(stream: *std.io.StreamSource) !void {
             else => {
                 if (vid_start_code.isSliceCode()) {
                     std.log.debug(" Slice {} ", .{vid_start_code});
-                    try processSlice(&global_mpeg, &video_buffer_reader);
+                    try processSlice(&global_mpeg, &video_buffer_reader, @intFromEnum(vid_start_code));
                 } else {
                     unreachable;
                 }
@@ -784,4 +835,124 @@ pub fn main() !void {
     stream = std.io.StreamSource{ .file = file };
 
     try sendPacketToDecoder(&stream);
+}
+
+fn f2f(comptime x: f32) i32 {
+    // 4096 = 1 << 12
+    return @intFromFloat(x * 4096 + 0.5);
+}
+
+fn idct1D(s0: i32, s1: i32, s2: i32, s3: i32, s4: i32, s5: i32, s6: i32, s7: i32) struct { i32, i32, i32, i32, i32, i32, i32, i32 } {
+    var p2 = s2;
+    var p3 = s6;
+
+    var p1 = (p2 + p3) * f2f(0.5411961);
+    var t2 = p1 + p3 * f2f(-1.847759065);
+    var t3 = p1 + p2 * f2f(0.765366865);
+    p2 = s0;
+    p3 = s4;
+    var t0 = (p2 + p3) * 4096;
+    var t1 = (p2 - p3) * 4096;
+    const x0 = t0 + t3;
+    const x3 = t0 - t3;
+    const x1 = t1 + t2;
+    const x2 = t1 - t2;
+    t0 = s7;
+    t1 = s5;
+    t2 = s3;
+    t3 = s1;
+    p3 = t0 + t2;
+    var p4 = t1 + t3;
+    p1 = t0 + t3;
+    p2 = t1 + t2;
+    const p5 = (p3 + p4) * f2f(1.175875602);
+    t0 = t0 * f2f(0.298631336);
+    t1 = t1 * f2f(2.053119869);
+    t2 = t2 * f2f(3.072711026);
+    t3 = t3 * f2f(1.501321110);
+    p1 = p5 + p1 * f2f(-0.899976223);
+    p2 = p5 + p2 * f2f(-2.562915447);
+    p3 = p3 * f2f(-1.961570560);
+    p4 = p4 * f2f(-0.390180644);
+    t3 += p1 + p4;
+    t2 += p2 + p3;
+    t1 += p2 + p4;
+    t0 += p1 + p3;
+
+    return .{ x0, x1, x2, x3, t0, t1, t2, t3 };
+}
+
+fn idctBlock(block: []i32) void {
+    for (0..8) |x| {
+        const s0 = block[0 * 8 + x];
+        const s1 = block[1 * 8 + x];
+        const s2 = block[2 * 8 + x];
+        const s3 = block[3 * 8 + x];
+        const s4 = block[4 * 8 + x];
+        const s5 = block[5 * 8 + x];
+        const s6 = block[6 * 8 + x];
+        const s7 = block[7 * 8 + x];
+
+        var x0: i32 = 0;
+        var x1: i32 = 0;
+        var x2: i32 = 0;
+        var x3: i32 = 0;
+        var t0: i32 = 0;
+        var t1: i32 = 0;
+        var t2: i32 = 0;
+        var t3: i32 = 0;
+
+        x0, x1, x2, x3, t0, t1, t2, t3 = idct1D(s0, s1, s2, s3, s4, s5, s6, s7);
+
+        x0 += 512;
+        x1 += 512;
+        x2 += 512;
+        x3 += 512;
+
+        block[0 * 8 + x] = (x0 + t3) >> 10;
+        block[1 * 8 + x] = (x1 + t2) >> 10;
+        block[2 * 8 + x] = (x2 + t1) >> 10;
+        block[3 * 8 + x] = (x3 + t0) >> 10;
+        block[4 * 8 + x] = (x3 - t0) >> 10;
+        block[5 * 8 + x] = (x2 - t1) >> 10;
+        block[6 * 8 + x] = (x1 - t2) >> 10;
+        block[7 * 8 + x] = (x0 - t3) >> 10;
+    }
+
+    for (0..8) |y| {
+        const s0 = block[y * 8 + 0];
+        const s1 = block[y * 8 + 1];
+        const s2 = block[y * 8 + 2];
+        const s3 = block[y * 8 + 3];
+        const s4 = block[y * 8 + 4];
+        const s5 = block[y * 8 + 5];
+        const s6 = block[y * 8 + 6];
+        const s7 = block[y * 8 + 7];
+
+        var x0: i32 = 0;
+        var x1: i32 = 0;
+        var x2: i32 = 0;
+        var x3: i32 = 0;
+        var t0: i32 = 0;
+        var t1: i32 = 0;
+        var t2: i32 = 0;
+        var t3: i32 = 0;
+
+        x0, x1, x2, x3, t0, t1, t2, t3 = idct1D(s0, s1, s2, s3, s4, s5, s6, s7);
+
+        // add 0.5 scaled up by factor
+        x0 += (1 << 17) / 2;
+        x1 += (1 << 17) / 2;
+        x2 += (1 << 17) / 2;
+        x3 += (1 << 17) / 2;
+
+        block[y * 8 + 0] = (x0 + t3) >> 17;
+        block[y * 8 + 1] = (x1 + t2) >> 17;
+        block[y * 8 + 2] = (x2 + t1) >> 17;
+        block[y * 8 + 3] = (x3 + t0) >> 17;
+        block[y * 8 + 4] = (x3 - t0) >> 17;
+        block[y * 8 + 5] = (x2 - t1) >> 17;
+        block[y * 8 + 6] = (x1 - t2) >> 17;
+        block[y * 8 + 7] = (x0 - t3) >> 17;
+    }
 }

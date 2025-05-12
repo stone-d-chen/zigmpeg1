@@ -286,7 +286,9 @@ pub const mb_type_B_lookup: CodeLookup = .{
 //     .{ .code = 0b1, .value = 0b10000, .length = 1 },
 // };
 
-const mb_address_increment_vlc: [33]VariableLengthCode = .{
+const mb_address_increment_vlc: [35]VariableLengthCode = .{
+    .{ .code = 0b0000_0001_000, .value = 35, .length = 11 },
+    .{ .code = 0b0000_0001_111, .value = 34, .length = 11 },
     .{ .code = 0b0000_0011_000, .value = 33, .length = 11 },
     .{ .code = 0b0000_0011_001, .value = 32, .length = 11 },
     .{ .code = 0b0000_0011_010, .value = 31, .length = 11 },

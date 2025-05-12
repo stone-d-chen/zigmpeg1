@@ -110,6 +110,9 @@ pub const mpeg = struct {
     extra_information_slice: u8,
 
     // macroblock
+    macroblock_address: i32,
+    macroblock_row: u32,
+    macroblock_col: u32,
     block_pattern: u8,
     mb_intra: u16,
 
